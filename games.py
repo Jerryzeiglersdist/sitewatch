@@ -333,16 +333,25 @@ class Breakout(Game):
             self.vy = 1; ny = self.by + 1
         if (nx, ny) in self.bricks:
             self.bricks.discard((nx, ny)); self.vy = -self.vy; ny = self.by + self.vy
+            if random.random() < 0.3:
+                self.vx = random.choice((-1, 0, 1))
             if not self.bricks:
                 self.pause = 8
         # paddle follows the ball, with a little lag
         target = nx - 1
-        if random.random() < 0.85:
+        if random.random() < 0.95:
             self.px += (target > self.px) - (target < self.px)
         self.px = max(0, min(self.w - 2, self.px))
         if ny == self.h - 1:
             if self.px <= nx <= self.px + 1:
                 self.vy = -1; ny = self.by - 1
+                # the paddle steers: left cell angles left, right cell angles right, and
+                # sometimes it goes straight up (which is what lets it reach every brick)
+                if self.bricks and random.random() < 0.7:          # aim roughly at a remaining brick
+                    bx = random.choice(sorted(self.bricks))[0]
+                    self.vx = (bx > nx) - (bx < nx)
+                else:
+                    self.vx = random.choice((-1, 0, 1))
             else:
                 self.pause = 4; self.bx, self.by, self.vy = self.w // 2, self.h - 3, -1
                 return
