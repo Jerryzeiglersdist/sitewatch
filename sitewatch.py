@@ -75,6 +75,8 @@ GREEN_PATTERN = os.getenv("GREEN_PATTERN", "ekg").lower()  # ekg | heartbeat | s
 PANEL_WIDTH = int(os.getenv("PANEL_WIDTH", "8"))
 PANEL_ROTATE = int(os.getenv("PANEL_ROTATE", "0"))           # 0 | 90 | 180 | 270 if the trace comes out sideways
 PANEL_SERPENTINE = os.getenv("PANEL_SERPENTINE", "1") == "1"  # BTF 8x8 panels zig-zag row by row
+PANEL_MIRROR_X = os.getenv("PANEL_MIRROR_X", "1") == "1"      # flip left/right (set 0 if scrolling text reads backwards)
+GAME_SPEED = float(os.getenv("GAME_SPEED", "2.0"))            # >1 slows every game and banner down, <1 speeds them up
 
 UP, DOWN, NET_DOWN = "UP", "DOWN", "NET_DOWN"
 
@@ -214,6 +216,8 @@ class Panel(threading.Thread):
         """Map (x, y) with (0,0) top-left to a pixel index on a serpentine panel."""
         w = PANEL_WIDTH
         h = LED_COUNT // w
+        if PANEL_MIRROR_X:
+            x = w - 1 - x
         if PANEL_ROTATE == 90:
             x, y = w - 1 - y, x
         elif PANEL_ROTATE == 180:
@@ -382,7 +386,7 @@ class Panel(threading.Thread):
                                              "x": 0, "y": 0, "frame": 0, "flash": 0, "kind": 1,
                                              "tx": 0, "trot": 0, "rot": 0})
         st["frame"] += 1
-        step = st["frame"] % 5 == 0                         # one game tick every 5 frames
+        step = st["frame"] % max(1, round(5 * GAME_SPEED)) == 0   # one game tick every 5 frames at GAME_SPEED=1
         grid = st["grid"]
 
         def fits(cells, x, y):
@@ -417,7 +421,8 @@ class Panel(threading.Thread):
 
         marquee = self._marquee.get(which)
         if marquee is not None:                             # scrolling GAME OVER
-            marquee.step()
+            if st["frame"] % max(1, round(GAME_SPEED)) == 0:
+                marquee.step()
             if marquee.done:
                 self._marquee.pop(which, None)
             else:
@@ -510,13 +515,14 @@ class Panel(threading.Thread):
         self._games[key][1] = frame
         marquee = self._marquee.get(which)
         if marquee is None:
-            if frame % game.speed == 0:
+            if frame % max(1, round(game.speed * GAME_SPEED)) == 0:
                 game.tick()
             if game.banner:                                 # the game just ended: scroll its message
                 self._marquee[which] = marquee = games.Marquee(game.banner, self._rw, rows, self._BANNER_RGB)
                 game.banner = None
         if marquee is not None:
-            marquee.step()
+            if frame % max(1, round(GAME_SPEED)) == 0:
+                marquee.step()
             if marquee.done:
                 self._marquee.pop(which, None)
             else:
