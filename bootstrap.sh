@@ -26,6 +26,7 @@ git config user.email "sitewatch@$(hostname)"; git config user.name "sitewatch"
 git fetch -q origin main
 git reset -q --hard origin/main         # only tracked files change; .env/venv/logs are untracked
 chmod +x "$DEST"/*.sh
+install -d -o pi -g pi "$DEST/run"
 [[ -f "$DEST/.env" ]] || cp "$DEST/.env.example" "$DEST/.env"
 
 echo "==> systemd units (service, status page, update timer)"

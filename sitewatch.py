@@ -17,6 +17,7 @@ Log files older than LOG_RETENTION_DAYS are deleted at startup and once a day.
 """
 
 import argparse
+import json
 import logging
 import os
 import subprocess
@@ -34,6 +35,7 @@ import games
 
 BASE_DIR = Path(__file__).resolve().parent
 LOG_DIR = BASE_DIR / "logs"
+OVERRIDE_FILE = BASE_DIR / "run" / "override.json"   # written by status.py when you pick a game on the web page
 load_dotenv(BASE_DIR / ".env")
 
 # ---------------------------------------------------------------- settings --
@@ -45,6 +47,7 @@ TETRIS_COLORS = os.getenv("TETRIS_COLORS", "1") == "1"  # tetris: classic piece 
 PATTERN_ROTATE = int(os.getenv("PATTERN_ROTATE", "30"))  # minutes per pattern when PATTERNS lists more than one (0 = never rotate)
 PATTERNS = [p.strip().lower() for p in os.getenv(
     "PATTERNS", "tetris,runner,climber,pong,snake,breakout,invaders,frogger,racer").split(",") if p.strip()]
+PATTERN_NAMES = ("tetris", "ripple", "bars", "sonar", "ekg") + tuple(games.GAMES)   # everything the split layout can draw
 MAIN_PATTERN = os.getenv("MAIN_PATTERN", "tetris").lower()  # used when PATTERN_ROTATE=0: tetris | runner | climber | pong | snake | breakout | invaders | frogger | racer | ripple | bars | sonar | ekg
 BETA_PATTERN = os.getenv("BETA_PATTERN", "tetris").lower()  # SPLIT=lr/tb only, same choices
 BAR_SCALE = float(os.getenv("BAR_SCALE", "2.0"))           # bars: response time (s) that fills the full height
@@ -461,12 +464,27 @@ class Panel(threading.Thread):
             for xx, (r, g, b) in enumerate(row):
                 self.strip.setPixelColor(self._pxy(xx, y0 + yy), self._Color(r, g, b))
 
-    @staticmethod
-    def _current_pattern(default: str) -> str:
-        """Which idle pattern to show now: rotates through PATTERNS on the wall clock."""
+    _override = (0.0, None)      # (last check time, pattern name or None)
+
+    def _current_pattern(self, default: str) -> str:
+        """Which idle pattern to show now: the web-page override if set, else the
+        PATTERNS rotation on the wall clock, else `default`."""
+        now = time.time()
+        checked, choice = self._override
+        if now - checked > 1.0:                             # re-read the override file once a second
+            choice = None
+            try:
+                data = json.loads(OVERRIDE_FILE.read_text())
+                if data.get("pattern") in PATTERN_NAMES and (not data.get("until") or data["until"] > now):
+                    choice = data["pattern"]
+            except (OSError, ValueError):
+                pass
+            self._override = (now, choice)
+        if choice:
+            return choice
         if PATTERN_ROTATE <= 0 or len(PATTERNS) < 2:
             return default
-        slot = int(time.time() // (PATTERN_ROTATE * 60))
+        slot = int(now // (PATTERN_ROTATE * 60))
         return PATTERNS[slot % len(PATTERNS)]
 
     def _pulse_net(self) -> None:

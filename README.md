@@ -88,7 +88,9 @@ saving, which on a Pi 3 can stall the connection and look like an internet outag
 
 `sitewatch-status.service` serves a read-only page on the LAN at
 `http://sitewatch.local:8080/`: current state of both sites, recent events, the
-log tail, and `/health` as JSON. It only reads the log files.
+log tail, and `/health` as JSON. It also has a row of buttons to pin the panel
+to a particular game (or back to `auto` rotation); that is the only thing it can
+change, via `run/override.json`. Everything else is read-only.
 
 ## Check it
 

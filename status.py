@@ -21,7 +21,29 @@ from urllib.parse import parse_qs, urlparse
 
 BASE_DIR = Path(__file__).resolve().parent
 LOG_DIR = BASE_DIR / "logs"
+RUN_DIR = BASE_DIR / "run"
+OVERRIDE_FILE = RUN_DIR / "override.json"
 PORT = int(os.getenv("STATUS_PORT", "8080"))
+GAMES = ("tetris", "runner", "climber", "pong", "snake", "breakout", "invaders", "frogger", "racer")
+OTHERS = ("ripple", "bars", "sonar", "ekg")
+
+
+def current_override() -> str | None:
+    try:
+        data = json.loads(OVERRIDE_FILE.read_text())
+        if not data.get("until") or data["until"] > datetime.now().timestamp():
+            return data.get("pattern")
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def set_override(pattern: str | None) -> None:
+    RUN_DIR.mkdir(exist_ok=True)
+    if pattern:
+        OVERRIDE_FILE.write_text(json.dumps({"pattern": pattern, "until": 0}))
+    elif OVERRIDE_FILE.exists():
+        OVERRIDE_FILE.unlink()
 
 STATE_RE = re.compile(
     r"^(?P<ts>\S+ \S+) +(?P<lvl>\w+) +(?P<msg>.*(?:is DOWN|is BACK UP|internet appears to be down|Still up|Watching|TEST:).*)$"
@@ -106,6 +128,8 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>sitewatch</tit
  .UP{{background:#3c3}} .DOWN{{background:#e33}} .NET{{background:#a5f}}
  pre{{background:#000;padding:1rem;border-radius:8px;overflow:auto;font-size:.85rem}}
  a{{color:#8cf}} small{{color:#888}}
+ button{{margin:.2rem;padding:.5rem .9rem;border:0;border-radius:6px;background:#333;color:#eee;font-size:1rem;cursor:pointer}}
+ button.on{{background:#3c3;color:#000;font-weight:600}}
 </style></head><body>
 <h1>sitewatch</h1>
 <div class="tile {main_cls}">zeiglersdist.com: {main}</div>
@@ -113,6 +137,9 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>sitewatch</tit
 <div class="tile {net_cls}">internet: {internet}</div>
 <p><small>service: {service} &middot; Wi-Fi: {wifi} &middot; version: {commit} &middot; page generated {checked_at} (auto-refreshes every 30 s)</small></p>
 <p><a href="/log">full log tail</a> &middot; <a href="/update">update log</a> &middot; <a href="/health">json</a></p>
+<h2>Pick the game</h2>
+<form method="post" action="/set">{buttons}</form>
+<p><small>{now_playing}</small></p>
 <h2>Events, last 24 h</h2>
 <pre>{events}</pre>
 <h2>Last 40 log lines</h2>
@@ -133,6 +160,19 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def do_POST(self):
+        url = urlparse(self.path)
+        if url.path == "/set":
+            length = int(self.headers.get("Content-Length", "0"))
+            q = parse_qs(self.rfile.read(length).decode("utf-8", "replace"))
+            choice = q.get("pattern", [""])[0]
+            set_override(choice if choice in GAMES + OTHERS else None)
+            self.send_response(303)
+            self.send_header("Location", "/")
+            self.end_headers()
+        else:
+            self._send("not found", code=404)
+
     def do_GET(self):
         url = urlparse(self.path)
         q = parse_qs(url.query)
@@ -148,7 +188,14 @@ class Handler(BaseHTTPRequestHandler):
         elif url.path == "/":
             s = summarize()
             net_down = s["internet"] == "DOWN"
+            ov = current_override()
+            buttons = "".join(
+                f'<button name="pattern" value="{n}" class="{"on" if n == ov else ""}">{n}</button>'
+                for n in GAMES + OTHERS)
+            buttons = f'<button name="pattern" value="" class="{"on" if not ov else ""}">auto (rotate)</button>' + buttons
             self._send(PAGE.format(
+                buttons=buttons,
+                now_playing=f"pinned to {ov} until you press auto" if ov else "rotating through the list every PATTERN_ROTATE minutes",
                 main=s["main"], beta=s["beta"], internet=s["internet"],
                 main_cls="NET" if net_down else s["main"], beta_cls="NET" if net_down else s["beta"],
                 net_cls="NET" if net_down else "UP",

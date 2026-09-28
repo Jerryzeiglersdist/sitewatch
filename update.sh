@@ -26,6 +26,7 @@ log "updating ${LOCAL:0:7} -> ${REMOTE:0:7}"
 git log --oneline "$LOCAL..$REMOTE" | sed 's/^/    /' | tee -a "$LOG"
 git reset --hard --quiet "origin/$BRANCH"
 chmod +x "$DEST"/*.sh
+install -d -o pi -g pi "$DEST/run"      # status page (runs as pi) writes the game override here
 
 if git diff --name-only "$LOCAL" "$REMOTE" | grep -q '^requirements.txt$'; then
   log "requirements.txt changed; installing"
