@@ -12,8 +12,9 @@ A Raspberry Pi desk light that watches zeiglersdist.com.
 With `BETA_URL` set (default `LAYOUT=split`), the panel splits in two: the top
 half is the live site (green, red flash when down) and the bottom half is the
 Aldrich beta (orange, yellow flash when down). Each half reacts on its own, and
-each picks its idle animation with `MAIN_PATTERN` / `BETA_PATTERN`: `ripple`
-(default) is a ring pulsing out from the centre with a white spark on every good
+each picks its idle animation with `MAIN_PATTERN` / `BETA_PATTERN`: `tetris`
+(default) is an auto-playing Tetris whose stack pulses on every good check,
+`ripple` is a ring pulsing out from the centre with a white spark on every good
 check, `bars` shows the last 8 response times as a bar chart (taller = slower,
 `BAR_SCALE` seconds fills the height), `sonar` is a radar sweep that blips on
 every good check, and `ekg` is a heartbeat trace. `LAYOUT=strip` instead shows the beta as a solid bar on the bottom two

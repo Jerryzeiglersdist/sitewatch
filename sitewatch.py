@@ -38,8 +38,8 @@ load_dotenv(BASE_DIR / ".env")
 SITE_URL = os.getenv("SITE_URL", "https://www.zeiglersdist.com/")
 BETA_URL = os.getenv("BETA_URL", "")                   # optional second site shown as a strip along the bottom
 LAYOUT = os.getenv("LAYOUT", "split").lower()          # split: two half-panels, one per site | strip: beta as a bottom strip
-MAIN_PATTERN = os.getenv("MAIN_PATTERN", "ripple").lower()  # split layout, top half:  ripple | bars | sonar | ekg
-BETA_PATTERN = os.getenv("BETA_PATTERN", "ripple").lower()  # split layout, bottom half: ripple | bars | sonar | ekg
+MAIN_PATTERN = os.getenv("MAIN_PATTERN", "tetris").lower()  # split layout, top half:  tetris | ripple | bars | sonar | ekg
+BETA_PATTERN = os.getenv("BETA_PATTERN", "tetris").lower()  # split layout, bottom half: tetris | ripple | bars | sonar | ekg
 BAR_SCALE = float(os.getenv("BAR_SCALE", "2.0"))           # bars: response time (s) that fills the full height
 BETA_ROWS = int(os.getenv("BETA_ROWS", "2"))           # strip layout only: how many bottom rows the beta strip uses
 BETA_UP_COLOR = tuple(int(v) for v in os.getenv("BETA_UP_COLOR", "255,70,0").split(","))     # orange
@@ -109,6 +109,7 @@ class Panel(threading.Thread):
         self.hist = {"main": deque(maxlen=PANEL_WIDTH), "beta": deque(maxlen=PANEL_WIDTH)}  # response times (s)
         self.last_ok = {"main": 0.0, "beta": 0.0}   # monotonic time of the last successful check
         self._halt = threading.Event()
+        self._tetris = {}
         from rpi_ws281x import PixelStrip, Color  # imported here so --test on a PC can stub it
         self._Color = Color
         self.strip = PixelStrip(LED_COUNT, LED_PIN, brightness=LED_BRIGHTNESS)
@@ -333,6 +334,90 @@ class Panel(threading.Thread):
                 for y in (y0 + rows // 2 - 1, y0 + rows // 2):
                     self.strip.setPixelColor(self._xy(x, y), c)
 
+    # flat tetrominoes that fit a 4-row half (list of (dx, dy) cells)
+    _TETROMINOES = (
+        ((0, 0), (1, 0), (2, 0), (3, 0)),          # I
+        ((0, 0), (1, 0), (0, 1), (1, 1)),          # O
+        ((0, 0), (1, 0), (2, 0), (0, 1)),          # L
+        ((0, 0), (1, 0), (2, 0), (2, 1)),          # J
+        ((0, 0), (1, 0), (2, 0), (1, 1)),          # T
+        ((1, 0), (2, 0), (0, 1), (1, 1)),          # S
+        ((0, 0), (1, 0), (1, 1), (2, 1)),          # Z
+    )
+
+    def _draw_tetris(self, y0: int, rows: int, color: tuple, which: str) -> None:
+        """Auto-playing Tetris in the half: pieces drop, full rows clear, a full
+        stack flashes and resets. The stack pulses brighter on every good check."""
+        import random
+        w = PANEL_WIDTH
+        st = self._tetris.setdefault(which, {"grid": [[0] * w for _ in range(rows)], "piece": None,
+                                             "x": 0, "y": 0, "frame": 0, "flash": 0})
+        st["frame"] += 1
+        step = st["frame"] % 6 == 0                         # one game tick every 6 frames (~0.27 s)
+        grid = st["grid"]
+
+        def fits(cells, x, y):
+            for dx, dy in cells:
+                cx, cy = x + dx, y + dy
+                if cx < 0 or cx >= w or cy >= rows:
+                    return False
+                if cy >= 0 and grid[cy][cx]:
+                    return False
+            return True
+
+        if st["flash"]:                                     # game over: blink then wipe
+            st["flash"] -= 1
+            if st["flash"] == 0:
+                for r in grid:
+                    r[:] = [0] * w
+        elif st["piece"] is None:
+            cells = random.choice(self._TETROMINOES)
+            pw = max(dx for dx, _ in cells) + 1
+            ph = max(dy for _, dy in cells) + 1
+            heights = [next((yy for yy in range(rows) if grid[yy][xx]), rows) for xx in range(w)]
+            xs = list(range(w - pw + 1))
+            if random.random() < 0.6:                       # usually aim for the lowest spot
+                xs.sort(key=lambda xx: -min(heights[xx:xx + pw]))
+                x = xs[0]
+            else:
+                x = random.choice(xs)
+            st.update(piece=cells, x=x, y=-ph)
+        elif step:
+            cells, x, y = st["piece"], st["x"], st["y"]
+            if fits(cells, x, y + 1):
+                st["y"] = y + 1
+            else:                                           # land
+                if any(y + dy < 0 for _, dy in cells):
+                    st["piece"] = None
+                    st["flash"] = 8
+                else:
+                    for dx, dy in cells:
+                        grid[y + dy][x + dx] = 1
+                    full = [i for i, r in enumerate(grid) if all(r)]
+                    for i in full:
+                        del grid[i]
+                        grid.insert(0, [0] * w)
+                    st["piece"] = None
+
+        cr, cg, cb = color
+        t = time.monotonic()
+        boost = 1.0 if t - self.last_ok[which] < 0.4 else 0.55          # stack pulses on a good check
+        blink = st["flash"] and (st["flash"] // 2) % 2 == 0
+        dim = self._Color(int(cr * boost), int(cg * boost), int(cb * boost))
+        bright = self._Color(cr, cg, cb)
+        off = self._Color(0, 0, 0)
+        for yy in range(rows):
+            for xx in range(w):
+                c = dim if grid[yy][xx] else off
+                if blink and grid[yy][xx]:
+                    c = self._Color(255, 255, 255)
+                self.strip.setPixelColor(self._xy(xx, y0 + yy), c)
+        if st["piece"]:
+            for dx, dy in st["piece"]:
+                py = st["y"] + dy
+                if py >= 0:
+                    self.strip.setPixelColor(self._xy(st["x"] + dx, y0 + py), bright)
+
     def _pulse_net(self) -> None:
         """Slow purple breathing pulse over the whole panel while the internet is out."""
         steps = 30
@@ -369,6 +454,8 @@ class Panel(threading.Thread):
                         self._draw_bars(y0, rows, up_c, which)
                     elif pattern == "sonar":
                         self._draw_sonar(y0, rows, up_c, which)
+                    elif pattern == "tetris":
+                        self._draw_tetris(y0, rows, up_c, which)
                     elif pattern == "ripple":
                         self._draw_ripple(y0, rows, up_c, which, 1.2 if which == "beta" else 0.0)
                     else:
