@@ -16,8 +16,9 @@ flashes yellow. `SPLIT=lr` or `SPLIT=tb` instead gives each site its own half
 with its own animation. Each half reacts on its own, and
 the idle animation rotates through `PATTERNS` every `PATTERN_ROTATE` minutes
 (default: a set of self-playing retro-style mini-games from `games.py` -
-tetris, runner, climber, pong, snake, breakout, invaders, frogger, racer - each
-flashing or pulsing on every good check). Set `PATTERN_ROTATE=0` to stay on
+tetris, runner, climber, pong, snake, breakout, invaders, frogger, racer, simon,
+missile command, asteroids, cave flyer, flappy, centipede, tanks, lunar lander,
+pinball, lights out, skiing, digger - each flashing or pulsing on every good check). Set `PATTERN_ROTATE=0` to stay on
 `MAIN_PATTERN` (`BETA_PATTERN` for the beta half in `lr`/`tb` layouts). Other
 patterns: `tetris` is an auto-playing Tetris in classic piece colours (`TETRIS_COLORS=0`
 for the site's colour) whose stack pulses on every good check,

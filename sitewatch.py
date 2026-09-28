@@ -46,7 +46,8 @@ SPLIT = os.getenv("SPLIT", "full").lower()             # split layout: full = on
 TETRIS_COLORS = os.getenv("TETRIS_COLORS", "1") == "1"  # tetris: classic piece colours (else the site colour)
 PATTERN_ROTATE = int(os.getenv("PATTERN_ROTATE", "30"))  # minutes per pattern when PATTERNS lists more than one (0 = never rotate)
 PATTERNS = [p.strip().lower() for p in os.getenv(
-    "PATTERNS", "tetris,runner,climber,pong,snake,breakout,invaders,frogger,racer").split(",") if p.strip()]
+    "PATTERNS", "tetris,runner,climber,pong,snake,breakout,invaders,frogger,racer,simon,missile,asteroids,"
+                "cave,flappy,centipede,tanks,lander,pinball,lightsout,skiing,digger").split(",") if p.strip()]
 PATTERN_NAMES = ("tetris", "ripple", "bars", "sonar", "ekg") + tuple(games.GAMES)   # everything the split layout can draw
 MAIN_PATTERN = os.getenv("MAIN_PATTERN", "tetris").lower()  # used when PATTERN_ROTATE=0: tetris | runner | climber | pong | snake | breakout | invaders | frogger | racer | ripple | bars | sonar | ekg
 BETA_PATTERN = os.getenv("BETA_PATTERN", "tetris").lower()  # SPLIT=lr/tb only, same choices
@@ -350,7 +351,7 @@ class Panel(threading.Thread):
                 for y in (y0 + rows // 2 - 1, y0 + rows // 2):
                     self.strip.setPixelColor(self._pxy(x, y), c)
 
-    # flat tetrominoes that fit a 4-row half (list of (dx, dy) cells)
+    # the seven tetrominoes in spawn orientation (list of (dx, dy) cells) and classic colours
     _TETROMINOES = (
         ((0, 0), (1, 0), (2, 0), (3, 0)),          # I
         ((0, 0), (1, 0), (0, 1), (1, 1)),          # O
@@ -359,26 +360,28 @@ class Panel(threading.Thread):
         ((0, 0), (1, 0), (2, 0), (1, 1)),          # T
         ((1, 0), (2, 0), (0, 1), (1, 1)),          # S
         ((0, 0), (1, 0), (1, 1), (2, 1)),          # Z
-        ((0, 0), (0, 1), (0, 2), (0, 3)),          # I upright
-        ((0, 0), (0, 1), (0, 2), (1, 2)),          # L upright
-        ((1, 0), (1, 1), (1, 2), (0, 2)),          # J upright
-        ((0, 0), (0, 1), (0, 2), (1, 1)),          # T sideways
-        ((0, 0), (0, 1), (1, 1), (1, 2)),          # S upright
-        ((1, 0), (1, 1), (0, 1), (0, 2)),          # Z upright
     )
-    # classic Game Boy / Guideline colours, indexed like _TETROMINOES (mod 7)
     _TETRIS_RGB = ((0, 200, 255), (255, 200, 0), (255, 90, 0), (0, 60, 255),
                    (170, 0, 255), (0, 220, 40), (255, 0, 30))
 
+    @staticmethod
+    def _rot(cells):
+        """Rotate a piece 90 degrees clockwise and re-anchor it at (0, 0)."""
+        maxy = max(dy for _, dy in cells)
+        r = [(maxy - dy, dx) for dx, dy in cells]
+        return tuple(sorted(r))
+
     def _draw_tetris(self, y0: int, rows: int, color: tuple, which: str) -> None:
-        """Auto-playing Tetris in the half: pieces drop, full rows clear, a full
+        """Auto-playing Tetris: each piece spawns at the top, then slides and rotates
+        into the spot a little AI picked while it falls. Full rows clear; a full
         stack flashes and resets. The stack pulses brighter on every good check."""
         import random
         w = self._rw
         st = self._tetris.setdefault(which, {"grid": [[0] * w for _ in range(rows)], "piece": None,
-                                             "x": 0, "y": 0, "frame": 0, "flash": 0})
+                                             "x": 0, "y": 0, "frame": 0, "flash": 0, "kind": 1,
+                                             "tx": 0, "trot": 0, "rot": 0})
         st["frame"] += 1
-        step = st["frame"] % 6 == 0                         # one game tick every 6 frames (~0.27 s)
+        step = st["frame"] % 5 == 0                         # one game tick every 5 frames
         grid = st["grid"]
 
         def fits(cells, x, y):
@@ -390,31 +393,66 @@ class Panel(threading.Thread):
                     return False
             return True
 
+        def landing(cells, x):
+            y = -max(dy for _, dy in cells) - 1
+            while fits(cells, x, y + 1):
+                y += 1
+            return y
+
+        def score(cells, x):
+            """Lower is better: land high up = bad, holes underneath = bad, full rows = good."""
+            y = landing(cells, x)
+            if not fits(cells, x, y):
+                return None
+            filled = {(x + dx, y + dy) for dx, dy in cells}
+            top = min(y + dy for _, dy in cells)
+            holes = 0
+            for cx, cy in filled:
+                yy = cy + 1
+                while yy < rows and not grid[yy][cx] and (cx, yy) not in filled:
+                    holes += 1; yy += 1
+            full = sum(1 for r in range(rows) if all(grid[r][c] or (c, r) in filled for c in range(w)))
+            return (rows - top) * 2 + holes * 4 - full * 6 + random.random()
+
         if st["flash"]:                                     # game over: blink then wipe
             st["flash"] -= 1
             if st["flash"] == 0:
                 for r in grid:
                     r[:] = [0] * w
         elif st["piece"] is None:
-            idx = random.choice([i for i, c in enumerate(self._TETROMINOES) if max(dx for dx, _ in c) < w
-                                 and max(dy for _, dy in c) < rows])
-            cells = self._TETROMINOES[idx]
-            st["kind"] = idx % 7 + 1
-            pw = max(dx for dx, _ in cells) + 1
-            ph = max(dy for _, dy in cells) + 1
-            heights = [next((yy for yy in range(rows) if grid[yy][xx]), rows) for xx in range(w)]
-            xs = list(range(w - pw + 1))
-            if random.random() < 0.6:                       # usually aim for the lowest spot
-                xs.sort(key=lambda xx: -min(heights[xx:xx + pw]))
-                x = xs[0]
+            kind = random.randrange(7)
+            base = self._TETROMINOES[kind]
+            best = None
+            cells = base
+            for rot in range(4):
+                pw = max(dx for dx, _ in cells) + 1
+                for x in range(w - pw + 1):
+                    sc = score(cells, x)
+                    if sc is not None and (best is None or sc < best[0]):
+                        best = (sc, rot, x)
+                cells = self._rot(cells)
+            if best is None:
+                st["flash"] = 8
             else:
-                x = random.choice(xs)
-            st.update(piece=cells, x=x, y=-ph)
+                pw = max(dx for dx, _ in base) + 1
+                st.update(piece=base, kind=kind + 1, rot=0, trot=best[1], tx=best[2],
+                          x=max(0, min(w - pw, (w - pw) // 2)), y=-max(dy for _, dy in base) - 1)
         elif step:
             cells, x, y = st["piece"], st["x"], st["y"]
-            if fits(cells, x, y + 1):
+            moved = False
+            if st["rot"] != st["trot"]:                     # turn first...
+                rc = self._rot(cells)
+                nx = min(x, w - (max(dx for dx, _ in rc) + 1))
+                if fits(rc, nx, y):
+                    st.update(piece=rc, x=nx, rot=(st["rot"] + 1) % 4); moved = True
+            if not moved and x != st["tx"]:                 # ...then slide toward the chosen column
+                nx = x + (1 if st["tx"] > x else -1)
+                if fits(cells, nx, y):
+                    st["x"] = nx; moved = True
+            if fits(cells, st["x"], y + 1):                 # and always keep falling
                 st["y"] = y + 1
-            else:                                           # land
+            else:                                           # landed
+                x, cells = st["x"], st["piece"]
                 if any(y + dy < 0 for _, dy in cells):
                     st["piece"] = None
                     st["flash"] = 8

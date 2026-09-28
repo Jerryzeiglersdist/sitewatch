@@ -455,16 +455,24 @@ class Frogger(Game):
             if self.t % 4 == 0:
                 self.fx, self.fy = random.randrange(self.w), self.h - 1
             return
-        # hop up when the next lane cell is clear now and won't be next step
+
+        def soon(x, y):                                     # occupied now, or after the next car move
+            if self._occupied(x, y):
+                return True
+            for ly, d, cars in self.lanes:
+                if ly == y and any((c + d + k) % self.w == x for c in cars for k in (0, 1)):
+                    return True
+            return False
+
         ny = self.fy - 1
-        if not self._occupied(self.fx, ny) and not any(
-                ly == ny and any((c + d + k) % self.w == self.fx for c in cars for k in (0, 1))
-                for ly, d, cars in self.lanes):
+        if not soon(self.fx, ny):
             self.fy = ny
-        elif random.random() < 0.3:
-            nx = self.fx + random.choice((-1, 1))
-            if 0 <= nx < self.w and not self._occupied(nx, self.fy):
-                self.fx = nx
+        elif soon(self.fx, self.fy):                        # about to be hit: dodge sideways or back
+            opts = [(self.fx + dx, self.fy) for dx in (-1, 1) if 0 <= self.fx + dx < self.w and not soon(self.fx + dx, self.fy)]
+            if self.fy + 1 < self.h and not soon(self.fx, self.fy + 1):
+                opts.append((self.fx, self.fy + 1))
+            if opts:
+                self.fx, self.fy = random.choice(opts)
 
     def render(self, boost=False):
         g = self.blank()
@@ -526,6 +534,686 @@ class Racer(Game):
         return g
 
 
+# ------------------------------------------------------------------- simon --
+class Simon(Game):
+    """Four colour quadrants light in a growing sequence, then the sequence is replayed."""
+    speed = 5
+    COLS = ((255, 40, 40), (40, 220, 40), (40, 80, 255), (255, 220, 0))
+
+    def reset(self):
+        self.seq = [random.randrange(4)]
+        self.pos = 0
+        self.phase = "show"          # show -> replay -> grow
+        self.on = 0                  # ticks the current pad stays lit
+
+    def tick(self):
+        if self.on:
+            self.on -= 1
+            return
+        if self.phase in ("show", "replay"):
+            if self.pos < len(self.seq):
+                self.lit = self.seq[self.pos]
+                self.on = 2 if self.phase == "show" else 1
+                self.pos += 1
+            else:
+                self.lit = None
+                self.pos = 0
+                self.on = 2
+                if self.phase == "show":
+                    self.phase = "replay"
+                else:
+                    self.phase = "grow"
+        else:
+            if len(self.seq) >= 8:
+                self.seq = []
+                self.lit = "win"; self.on = 4
+            self.seq.append(random.randrange(4))
+            self.phase = "show"
+
+    def render(self, boost=False):
+        g = self.blank()
+        hw, hh = self.w // 2, self.h // 2
+        lit = getattr(self, "lit", None)
+        for i, (qx, qy) in enumerate(((0, 0), (hw, 0), (0, hh), (hw, hh))):
+            c = self.COLS[i]
+            f = 1.0 if (lit == i or lit == "win") else (0.35 if boost else 0.15)
+            for y in range(qy, qy + hh):
+                for x in range(qx, qx + hw):
+                    if (x - qx) in (0, hw - 1) or (y - qy) in (0, hh - 1) or lit == i or lit == "win":
+                        g[y][x] = dim(c, f)
+        return g
+
+
+# ---------------------------------------------------------- missile command --
+class MissileCommand(Game):
+    speed = 3
+    CITY, TRAIL, WARHEAD, BURST = (0, 200, 255), (120, 40, 40), (255, 60, 60), (255, 220, 120)
+
+    def reset(self):
+        self.cities = [1, self.w // 2, self.w - 2]
+        self.missiles = []           # [x, y, tx (target x), trail list]
+        self.bursts = []             # [x, y, r, ttl]
+        self.t = 0
+        self.pause = 0
+
+    def tick(self):
+        self.t += 1
+        if self.pause:
+            self.pause -= 1
+            if self.pause == 0:
+                self.reset()
+            return
+        if self.t % 5 == 0 and len(self.missiles) < 3 and self.cities:
+            tx = random.choice(self.cities)
+            self.missiles.append([random.randrange(self.w), 0, tx, []])
+        for m in self.missiles:
+            m[3] = ([(m[0], m[1])] + m[3])[:2]
+            m[1] += 1
+            if m[0] != m[2] and random.random() < 0.6:
+                m[0] += 1 if m[2] > m[0] else -1
+        # interceptor: burst above the lowest missile once it's halfway down
+        for m in self.missiles:
+            if m[1] == self.h - 4 and random.random() < 0.85:
+                self.bursts.append([m[0], m[1] + 1, 0, 4])
+        for b in self.bursts:
+            b[2] = min(b[2] + 1, 2); b[3] -= 1
+        self.bursts = [b for b in self.bursts if b[3] > 0]
+        keep = []
+        for m in self.missiles:
+            if any(abs(m[0] - b[0]) <= b[2] and abs(m[1] - b[1]) <= b[2] for b in self.bursts):
+                continue
+            if m[1] >= self.h - 1:
+                if m[0] in self.cities:
+                    self.cities.remove(m[0])
+                    self.bursts.append([m[0], self.h - 1, 1, 3])
+                continue
+            keep.append(m)
+        self.missiles = keep
+        if not self.cities:
+            self.pause = 10
+
+    def render(self, boost=False):
+        g = self.blank()
+        for cx in self.cities:
+            self.put(g, cx, self.h - 1, (255, 255, 255) if boost else self.CITY)
+            self.put(g, cx + 1, self.h - 1, self.CITY)
+        for m in self.missiles:
+            for i, (x, y) in enumerate(m[3]):
+                self.put(g, x, y, dim(self.TRAIL, 1.0 - 0.4 * i))
+            self.put(g, m[0], m[1], self.WARHEAD)
+        for x, y, r, ttl in self.bursts:
+            for dy in range(-r, r + 1):
+                for dx in range(-r, r + 1):
+                    if abs(dx) + abs(dy) <= r:
+                        self.put(g, x + dx, y + dy, dim(self.BURST, ttl / 4))
+        return g
+
+
+# ---------------------------------------------------------------- asteroids --
+class Asteroids(Game):
+    speed = 3
+    SHIP, NOSE, ROCK, SHOT = (255, 255, 255), (120, 120, 120), (160, 120, 90), (255, 255, 0)
+    DIRS = ((0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1))
+
+    def reset(self):
+        self.sx, self.sy = self.w // 2, self.h // 2
+        self.heading = 0
+        self.rocks = []
+        self.shots = []               # [x, y, dx, dy]
+        self.flash = []
+        self.t = 0
+        self._spawn()
+
+    def _spawn(self):
+        for _ in range(3):
+            x, y = random.choice((0, self.w - 1)), random.randrange(self.h)
+            self.rocks.append([float(x), float(y), random.choice((-0.5, 0.5)), random.choice((-0.5, 0.5)), 2])
+
+    def tick(self):
+        self.t += 1
+        self.flash = [(x, y, n - 1) for x, y, n in self.flash if n > 1]
+        for r in self.rocks:
+            r[0] = (r[0] + r[2]) % self.w; r[1] = (r[1] + r[3]) % self.h
+        if not self.rocks and self.t % 6 == 0:
+            self._spawn()
+        # aim at the nearest rock (8 directions), turn one step per tick, shoot when lined up
+        if self.rocks:
+            r = min(self.rocks, key=lambda r: abs(r[0] - self.sx) + abs(r[1] - self.sy))
+            dx, dy = r[0] - self.sx, r[1] - self.sy
+            want = self.DIRS.index((int((dx > 0.5) - (dx < -0.5)), int((dy > 0.5) - (dy < -0.5)))) if (abs(dx) > 0.5 or abs(dy) > 0.5) else self.heading
+            if want != self.heading:
+                self.heading = (self.heading + (1 if (want - self.heading) % 8 <= 4 else -1)) % 8
+            elif self.t % 2 == 0 and len(self.shots) < 2:
+                ddx, ddy = self.DIRS[self.heading]
+                self.shots.append([self.sx + ddx, self.sy + ddy, ddx, ddy])
+        keep = []
+        for s in self.shots:
+            s[0] += s[2]; s[1] += s[3]
+            if not (0 <= s[0] < self.w and 0 <= s[1] < self.h):
+                continue
+            hit = next((r for r in self.rocks if int(r[0]) == s[0] and int(r[1]) == s[1]), None)
+            if hit:
+                self.rocks.remove(hit)
+                self.flash.append((s[0], s[1], 3))
+                if hit[4] == 2:
+                    for vx, vy in ((0.7, 0.3), (-0.3, -0.7)):
+                        self.rocks.append([hit[0], hit[1], vx, vy, 1])
+                continue
+            keep.append(s)
+        self.shots = keep
+
+    def render(self, boost=False):
+        g = self.blank()
+        for r in self.rocks:
+            x, y = int(r[0]), int(r[1])
+            self.put(g, x, y, self.ROCK)
+            if r[4] == 2:
+                self.put(g, (x + 1) % self.w, y, dim(self.ROCK, 0.7))
+        for x, y, n in self.flash:
+            self.put(g, x, y, (255, 200, 100))
+        for s in self.shots:
+            self.put(g, s[0], s[1], self.SHOT)
+        ddx, ddy = self.DIRS[self.heading]
+        self.put(g, self.sx + ddx, self.sy + ddy, self.NOSE)
+        self.put(g, self.sx, self.sy, (255, 255, 0) if boost else self.SHIP)
+        return g
+
+
+# --------------------------------------------------------------- cave flyer --
+class CaveFlyer(Game):
+    speed = 3
+    ROCK, SHIP, FLAME = (90, 60, 120), (0, 255, 200), (255, 140, 0)
+
+    def reset(self):
+        self.cols = deque([(2, 5)] * self.w, maxlen=self.w)   # (ceiling row, floor row) per column: open between
+        self.top, self.bot = 2, 5
+        self.y = 3.5
+        self.crash = 0
+        self.t = 0
+
+    def tick(self):
+        self.t += 1
+        if self.crash:
+            self.crash -= 1
+            if self.crash == 0:
+                self.reset()
+            return
+        if self.t % 3 == 0:
+            gap = self.bot - self.top
+            move = random.choice((-1, 0, 0, 1))
+            self.top = max(0, min(self.h - 4, self.top + move))
+            gap = max(3, min(4, gap + random.choice((-1, 0, 0, 1))))
+            self.bot = min(self.h - 1, self.top + gap)
+        self.cols.append((self.top, self.bot))
+        # ship at column 2 steers toward the middle of the gap ahead, one row per tick at most
+        top, bot = self.cols[3]
+        target = (top + bot) / 2
+        self.y += max(-1, min(1, target - self.y))
+        top, bot = self.cols[2]
+        if not (top < int(round(self.y)) < bot):
+            if random.random() < 0.15:                      # now and then it really does clip the wall
+                self.crash = 6
+            else:
+                self.y = max(top + 1, min(bot - 1, self.y))
+
+    def render(self, boost=False):
+        g = self.blank()
+        for x, (top, bot) in enumerate(self.cols):
+            for y in range(self.h):
+                if y <= top or y >= bot:
+                    g[y][x] = self.ROCK
+        y = int(round(self.y))
+        self.put(g, 2, y, (255, 255, 255) if (self.crash % 2) or boost else self.SHIP)
+        if not self.crash and self.t % 2:
+            self.put(g, 1, y, self.FLAME)
+        return g
+
+
+# ------------------------------------------------------------------ flappy --
+class Flappy(Game):
+    speed = 3
+    WALL, BIRD, WING = (40, 200, 60), (255, 220, 0), (255, 140, 0)
+
+    def reset(self):
+        self.walls = deque([None] * self.w, maxlen=self.w)   # gap top row or None
+        self.y, self.vy = self.h / 2, 0.0
+        self.t = 0
+        self.crash = 0
+        self.flap = 0
+
+    def tick(self):
+        self.t += 1
+        if self.crash:
+            self.crash -= 1
+            if self.crash == 0:
+                self.reset()
+            return
+        prev = next((gt for gt in reversed(self.walls) if gt is not None), self.h // 2 - 1)
+        self.walls.append(max(1, min(self.h - 4, prev + random.randint(-2, 2))) if self.t % 5 == 0 else None)
+        nxt = next((gt for gt in list(self.walls)[2:] if gt is not None), self.h // 2 - 1)
+        centre = nxt + 1
+        self.vy = min(0.9, self.vy + 0.3)
+        if self.y + self.vy > centre + 0.4:
+            self.vy = -0.8; self.flap = 1
+        else:
+            self.flap = 0
+        self.y = max(0, min(self.h - 1, self.y + self.vy))
+        gt = self.walls[2]
+        yi = int(round(self.y))
+        if gt is not None and not (gt <= yi <= gt + 2):
+            if random.random() < 0.3:
+                self.crash = 6
+            else:
+                self.y = float(max(gt, min(gt + 2, yi)))
+
+    def render(self, boost=False):
+        g = self.blank()
+        for x, gt in enumerate(self.walls):
+            if gt is not None:
+                for y in range(self.h):
+                    if not (gt <= y <= gt + 2):
+                        g[y][x] = self.WALL
+        y = int(round(self.y))
+        self.put(g, 2, y, (255, 255, 255) if (self.crash % 2) or boost else self.BIRD)
+        self.put(g, 1, y - 1 if self.flap else y, self.WING)
+        return g
+
+
+# --------------------------------------------------------------- centipede --
+class Centipede(Game):
+    speed = 3
+    SEG, HEAD, SHROOM, GUN, SHOT = (0, 200, 60), (120, 255, 60), (200, 60, 120), (0, 160, 255), (255, 255, 255)
+
+    def reset(self):
+        self.shrooms = {(random.randrange(self.w), random.randrange(1, self.h - 2)) for _ in range(6)}
+        self.body = deque([(x, 0) for x in range(min(5, self.w))])   # head first
+        self.dir = 1
+        self.gx = self.w // 2
+        self.shot = None
+        self.t = 0
+        self.pause = 0
+
+    def tick(self):
+        self.t += 1
+        if self.pause:
+            self.pause -= 1
+            if self.pause == 0:
+                self.reset()
+            return
+        if self.body:
+            hx, hy = self.body[0]
+            nx = hx + self.dir
+            if nx < 0 or nx >= self.w or (nx, hy) in self.shrooms:
+                self.dir = -self.dir
+                nx, hy = hx, hy + 1
+            self.body.appendleft((nx, hy))
+            self.body.pop()
+            if hy >= self.h - 1:
+                self.pause = 6
+        # gun shadows the head and shoots
+        if self.body:
+            self.gx += (self.body[0][0] > self.gx) - (self.body[0][0] < self.gx)
+        if self.shot is None and self.t % 2 == 0:
+            self.shot = [self.gx, self.h - 2]
+        if self.shot:
+            self.shot[1] -= 1
+            pos = (self.shot[0], self.shot[1])
+            if pos in self.body:
+                idx = list(self.body).index(pos)
+                self.shrooms.add(pos)
+                body = list(self.body)
+                del body[idx]
+                self.body = deque(body)
+                self.shot = None
+                if not self.body:
+                    self.pause = 6
+            elif pos in self.shrooms:
+                self.shrooms.discard(pos); self.shot = None
+            elif self.shot[1] < 0:
+                self.shot = None
+
+    def render(self, boost=False):
+        g = self.blank()
+        for x, y in self.shrooms:
+            self.put(g, x, y, self.SHROOM)
+        for i, (x, y) in enumerate(self.body):
+            self.put(g, x, y, self.HEAD if i == 0 else self.SEG)
+        self.put(g, self.gx, self.h - 1, (255, 255, 255) if boost else self.GUN)
+        if self.shot:
+            self.put(g, self.shot[0], self.shot[1], self.SHOT)
+        return g
+
+
+# ------------------------------------------------------------------- tanks --
+class Tanks(Game):
+    speed = 3
+    A, B, WALL, SHELL = (0, 220, 80), (255, 120, 0), (110, 110, 110), (255, 255, 255)
+
+    def reset(self):
+        self.ay, self.by = random.randrange(self.h), random.randrange(self.h)
+        self.walls = {(self.w // 2 - 1 + random.randrange(2), y) for y in random.sample(range(self.h), 3)}
+        self.shells = []             # [x, y, dx]
+        self.hit = []                # [x, y, ttl]
+        self.t = 0
+
+    def tick(self):
+        self.t += 1
+        self.hit = [(x, y, n - 1) for x, y, n in self.hit if n > 1]
+        # each tank creeps toward the other's row (with some dithering) and fires when level
+        for me, other in (("ay", "by"), ("by", "ay")):
+            y, oy = getattr(self, me), getattr(self, other)
+            if random.random() < 0.7:
+                y += (oy > y) - (oy < y)
+            elif random.random() < 0.3:
+                y += random.choice((-1, 1))
+            setattr(self, me, max(0, min(self.h - 1, y)))
+        if self.ay == self.by and self.t % 3 == 0:
+            self.shells.append([1, self.ay, 1] if random.random() < 0.5 else [self.w - 2, self.by, -1])
+        keep = []
+        for s in self.shells:
+            s[0] += s[2]
+            pos = (s[0], s[1])
+            if pos in self.walls:
+                self.walls.discard(pos); self.hit.append((s[0], s[1], 2)); continue
+            if s[0] <= 0 and s[1] == self.ay or s[0] >= self.w - 1 and s[1] == self.by:
+                self.hit.append((s[0], s[1], 4))
+                if s[0] <= 0:
+                    self.ay = random.randrange(self.h)
+                else:
+                    self.by = random.randrange(self.h)
+                continue
+            if 0 <= s[0] < self.w:
+                keep.append(s)
+        self.shells = keep
+        if len(self.walls) < 2 and self.t % 8 == 0:
+            self.walls.add((self.w // 2 - 1 + random.randrange(2), random.randrange(self.h)))
+
+    def render(self, boost=False):
+        g = self.blank()
+        for x, y in self.walls:
+            self.put(g, x, y, self.WALL)
+        self.put(g, 0, self.ay, (255, 255, 255) if boost else self.A); self.put(g, 1, self.ay, dim(self.A, 0.5))
+        self.put(g, self.w - 1, self.by, self.B); self.put(g, self.w - 2, self.by, dim(self.B, 0.5))
+        for x, y, ttl in self.hit:
+            self.put(g, x, y, (255, 200, 80))
+        for x, y, _ in self.shells:
+            self.put(g, x, y, self.SHELL)
+        return g
+
+
+# ------------------------------------------------------------ lunar lander --
+class LunarLander(Game):
+    speed = 3
+    LANDER, FLAME, PAD, GROUND = (220, 220, 220), (255, 160, 0), (0, 255, 120), (80, 60, 40)
+
+    def reset(self):
+        self.pad = random.randrange(1, self.w - 2)
+        self.x, self.y = float(random.randrange(self.w)), 0.0
+        self.vy, self.vx = 0.0, 0.0
+        self.thrust = False
+        self.done = 0
+        self.ok = False
+
+    def tick(self):
+        if self.done:
+            self.done -= 1
+            if self.done == 0:
+                self.reset()
+            return
+        self.vy += 0.18
+        self.vx += 0.15 * ((self.pad + 0.5 > self.x + 0.5) - (self.pad + 0.5 < self.x - 0.5))
+        self.vx = max(-0.5, min(0.5, self.vx))
+        self.thrust = self.vy > 0.45 and self.y > 1 and random.random() < 0.9
+        if self.thrust:
+            self.vy -= 0.35
+        self.x = max(0, min(self.w - 1, self.x + self.vx))
+        self.y += self.vy
+        if self.y >= self.h - 2:
+            self.y = self.h - 2
+            self.ok = self.vy < 0.9 and self.pad <= round(self.x) <= self.pad + 1
+            self.done = 8
+
+    def render(self, boost=False):
+        g = self.blank()
+        for x in range(self.w):
+            g[self.h - 1][x] = self.GROUND
+        self.put(g, self.pad, self.h - 1, self.PAD); self.put(g, self.pad + 1, self.h - 1, self.PAD)
+        x, y = int(round(self.x)), int(round(self.y))
+        if self.done:
+            c = (0, 255, 0) if self.ok else (255, 60, 0)
+            if self.done % 2:
+                self.put(g, x, y, c); self.put(g, x - 1, y, dim(c, 0.5)); self.put(g, x + 1, y, dim(c, 0.5))
+            return g
+        self.put(g, x, y, (255, 255, 0) if boost else self.LANDER)
+        if self.thrust:
+            self.put(g, x, y + 1, self.FLAME)
+        return g
+
+
+# ----------------------------------------------------------------- pinball --
+class Pinball(Game):
+    speed = 2
+    BALL, BUMP, FLIP, WALL = (220, 220, 220), (255, 60, 180), (0, 200, 255), (60, 60, 60)
+
+    def reset(self):
+        self.bumpers = [(2, 2), (5, 2), (self.w // 2, 4)]
+        self.lit = {}
+        self.x, self.y = float(self.w - 1), float(self.h - 3)
+        self.vx, self.vy = -0.6, -1.6
+        self.flip = 0
+        self.lost = 0
+        self.balls = 0
+
+    def tick(self):
+        for k in list(self.lit):
+            self.lit[k] -= 1
+            if self.lit[k] <= 0:
+                del self.lit[k]
+        if self.lost:
+            self.lost -= 1
+            if self.lost == 0:
+                self.x, self.y, self.vx, self.vy = float(self.w - 1), float(self.h - 3), -0.6, -1.6
+            return
+        if self.flip:
+            self.flip -= 1
+        self.vy += 0.16
+        nx, ny = self.x + self.vx, self.y + self.vy
+        if nx < 0 or nx > self.w - 1:
+            self.vx = -self.vx * 0.9; nx = max(0, min(self.w - 1, nx))
+        if ny < 0:
+            self.vy = -self.vy * 0.8; ny = 0
+        for bx, by in self.bumpers:
+            if abs(nx - bx) < 1 and abs(ny - by) < 1:
+                self.lit[(bx, by)] = 3
+                ang = random.uniform(-1, 1)
+                self.vx = (nx - bx) * 1.2 + ang * 0.6
+                self.vy = -abs(self.vy) * 0.9 - 0.6 if ny <= by else abs(self.vy) * 0.6 + 0.3
+                nx, ny = self.x + self.vx, self.y + self.vy
+        if ny >= self.h - 1:
+            xi = int(round(nx))
+            if xi <= 2 or xi >= self.w - 3 or random.random() < 0.6:   # flipper reach (the middle is a gamble)
+                self.flip = 2
+                self.vy = -1.9 - random.random() * 0.5
+                self.vx = (0.4 + random.random() * 0.6) * (1 if xi <= 2 else -1)
+                ny = self.h - 2
+            else:                                              # drained
+                self.lost = 5; self.balls += 1
+                return
+        self.x, self.y = max(0, min(self.w - 1, nx)), max(0, min(self.h - 1, ny))
+
+    def render(self, boost=False):
+        g = self.blank()
+        for bx, by in self.bumpers:
+            self.put(g, bx, by, self.BUMP if (bx, by) in self.lit else dim(self.BUMP, 0.35))
+        for x in (0, 1, 2):
+            self.put(g, x, self.h - 1 - (1 if self.flip and self.vx > 0 and x == 2 else 0), self.FLIP)
+        for x in (self.w - 3, self.w - 2, self.w - 1):
+            self.put(g, x, self.h - 1 - (1 if self.flip and self.vx < 0 and x == self.w - 3 else 0), self.FLIP)
+        if not self.lost or self.lost % 2:
+            self.put(g, int(round(self.x)), int(round(self.y)), (255, 255, 0) if boost else self.BALL)
+        return g
+
+
+# --------------------------------------------------------------- lights out --
+class LightsOut(Game):
+    """4x4 puzzle in 2x2 blocks: scrambles itself, then solves itself one press at a time."""
+    speed = 5
+    ON, OFFC, PRESS = (255, 200, 0), (30, 20, 0), (255, 255, 255)
+
+    def reset(self):
+        self.n = min(self.w, self.h) // 2
+        self.grid = [[0] * self.n for _ in range(self.n)]
+        self.todo = []
+        self.pressing = None
+        self.phase = "scramble"
+        self.wait = 2
+
+    def _press(self, x, y):
+        for px, py in ((x, y), (x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+            if 0 <= px < self.n and 0 <= py < self.n:
+                self.grid[py][px] ^= 1
+
+    def tick(self):
+        if self.wait:
+            self.wait -= 1
+            return
+        if self.phase == "scramble":
+            cells = random.sample([(x, y) for x in range(self.n) for y in range(self.n)], random.randint(3, 6))
+            for c in cells:
+                self._press(*c)
+            self.todo = cells[::-1]
+            self.phase = "solve"; self.wait = 3
+        elif self.todo:
+            self.pressing = self.todo.pop()
+            self._press(*self.pressing)
+            self.wait = 1
+        else:
+            self.pressing = None
+            self.phase = "scramble"; self.wait = 4
+
+    def render(self, boost=False):
+        g = self.blank()
+        for y in range(self.n):
+            for x in range(self.n):
+                c = self.ON if self.grid[y][x] else self.OFFC
+                if self.pressing == (x, y) and self.wait:
+                    c = self.PRESS
+                elif boost and self.grid[y][x]:
+                    c = (255, 255, 200)
+                for dy in (0, 1):
+                    for dx in (0, 1):
+                        self.put(g, x * 2 + dx, y * 2 + dy, c)
+        return g
+
+
+# ------------------------------------------------------------------ skiing --
+class Skiing(Game):
+    speed = 3
+    L, R, SKIER, TRAIL = (255, 60, 60), (60, 120, 255), (255, 255, 255), (200, 220, 255)
+
+    def reset(self):
+        self.gates = deque([None] * self.h, maxlen=self.h)   # per row: gap left x, or None
+        self.x = self.w // 2
+        self.t = 0
+        self.miss = 0
+        self.trail = deque(maxlen=3)
+
+    def tick(self):
+        self.t += 1
+        if self.miss:
+            self.miss -= 1
+            return
+        if self.t % 4 == 0:
+            prev = next((gx for gx in reversed(self.gates) if gx is not None), self.w // 2 - 2)
+            self.gates.append(max(0, min(self.w - 4, prev + random.randint(-2, 2))))   # enters at the bottom, scrolls up
+        else:
+            self.gates.append(None)
+        nxt = next((gx for gx in list(self.gates)[1:] if gx is not None), None)
+        if nxt is not None:
+            target = nxt + 1 + (nxt % 2)                    # left or right side of the gate, per gate
+            self.x += (target > self.x) - (target < self.x)
+        self.trail.appendleft(self.x)
+        gx = self.gates[1]
+        if gx is not None and (not (gx < self.x < gx + 3) or random.random() < 0.05):
+            self.miss = 4
+
+    def render(self, boost=False):
+        g = self.blank()
+        for y, gx in enumerate(self.gates):
+            if gx is not None:
+                self.put(g, gx, y, self.L); self.put(g, gx + 3, y, self.R)
+        for i, tx in enumerate(self.trail):
+            self.put(g, tx, 0 if i == 0 else -1, self.TRAIL)
+        c = (255, 80, 0) if self.miss and self.miss % 2 else ((255, 255, 0) if boost else self.SKIER)
+        self.put(g, self.x, 1, c)
+        return g
+
+
+# ------------------------------------------------------------------ digger --
+class Digger(Game):
+    """A miner tunnels through dirt; two critters roam the tunnels after it."""
+    speed = 3
+    DIRT, TUNNEL, MINER, CRITTER, GEM = (110, 70, 30), (20, 12, 5), (255, 220, 0), (255, 60, 60), (0, 255, 200)
+
+    def reset(self):
+        self.dug = {(self.w // 2, 0)}
+        self.mx, self.my = self.w // 2, 0
+        self.dir = (0, 1)
+        self.critters = []
+        self.gems = {(random.randrange(self.w), random.randrange(2, self.h)) for _ in range(3)}
+        self.t = 0
+        self.caught = 0
+
+    def tick(self):
+        self.t += 1
+        if self.caught:
+            self.caught -= 1
+            if self.caught == 0:
+                self.reset()
+            return
+        # miner: keep going, prefer undug dirt, turn at walls / randomly
+        opts = []
+        for dx, dy in ((0, 1), (1, 0), (-1, 0), (0, -1)):
+            nx, ny = self.mx + dx, self.my + dy
+            if 0 <= nx < self.w and 0 <= ny < self.h:
+                weight = 3 if (nx, ny) not in self.dug else 1
+                if (dx, dy) == self.dir:
+                    weight += 2
+                if (nx, ny) in self.gems:
+                    weight += 6
+                opts += [(dx, dy)] * weight
+        self.dir = random.choice(opts)
+        self.mx += self.dir[0]; self.my += self.dir[1]
+        self.dug.add((self.mx, self.my))
+        self.gems.discard((self.mx, self.my))
+        if len(self.gems) < 3 and self.t % 10 == 0:
+            self.gems.add((random.randrange(self.w), random.randrange(1, self.h)))
+        if self.t % 12 == 0 and len(self.critters) < 2:
+            self.critters.append([self.w // 2, 0])
+        if self.t % 2 == 0:
+            for c in self.critters:
+                steps = [(c[0] + dx, c[1] + dy) for dx, dy in ((0, 1), (1, 0), (-1, 0), (0, -1))
+                         if (c[0] + dx, c[1] + dy) in self.dug]
+                if steps:
+                    best = min(steps, key=lambda p: abs(p[0] - self.mx) + abs(p[1] - self.my))
+                    c[0], c[1] = best if random.random() < 0.7 else random.choice(steps)
+                if (c[0], c[1]) == (self.mx, self.my):
+                    self.caught = 6
+
+    def render(self, boost=False):
+        g = self.blank()
+        for y in range(self.h):
+            for x in range(self.w):
+                g[y][x] = self.TUNNEL if (x, y) in self.dug else self.DIRT
+        for x, y in self.gems:
+            self.put(g, x, y, self.GEM)
+        for c in self.critters:
+            self.put(g, c[0], c[1], self.CRITTER)
+        mc = (255, 255, 255) if (self.caught % 2) or boost else self.MINER
+        self.put(g, self.mx, self.my, mc)
+        return g
+
+
 GAMES = {
     "runner": Runner,
     "climber": Climber,
@@ -535,4 +1223,16 @@ GAMES = {
     "invaders": Invaders,
     "frogger": Frogger,
     "racer": Racer,
+    "simon": Simon,
+    "missile": MissileCommand,
+    "asteroids": Asteroids,
+    "cave": CaveFlyer,
+    "flappy": Flappy,
+    "centipede": Centipede,
+    "tanks": Tanks,
+    "lander": LunarLander,
+    "pinball": Pinball,
+    "lightsout": LightsOut,
+    "skiing": Skiing,
+    "digger": Digger,
 }

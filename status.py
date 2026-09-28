@@ -24,7 +24,11 @@ LOG_DIR = BASE_DIR / "logs"
 RUN_DIR = BASE_DIR / "run"
 OVERRIDE_FILE = RUN_DIR / "override.json"
 PORT = int(os.getenv("STATUS_PORT", "8080"))
-GAMES = ("tetris", "runner", "climber", "pong", "snake", "breakout", "invaders", "frogger", "racer")
+try:
+    from games import GAMES as _GAMES
+    GAMES = ("tetris",) + tuple(_GAMES)
+except ImportError:
+    GAMES = ("tetris",)
 OTHERS = ("ripple", "bars", "sonar", "ekg")
 
 
