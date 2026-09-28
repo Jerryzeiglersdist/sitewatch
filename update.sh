@@ -11,6 +11,7 @@ mkdir -p "$DEST/logs"
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" | tee -a "$LOG"; }
 
 cd "$DEST"
+install -d -o pi -g pi "$DEST/run"      # status page (runs as pi) writes the game override here
 if ! git fetch --quiet origin "$BRANCH" 2>>"$LOG"; then
   log "fetch failed (no internet?)"; exit 0
 fi
@@ -26,7 +27,6 @@ log "updating ${LOCAL:0:7} -> ${REMOTE:0:7}"
 git log --oneline "$LOCAL..$REMOTE" | sed 's/^/    /' | tee -a "$LOG"
 git reset --hard --quiet "origin/$BRANCH"
 chmod +x "$DEST"/*.sh
-install -d -o pi -g pi "$DEST/run"      # status page (runs as pi) writes the game override here
 
 if git diff --name-only "$LOCAL" "$REMOTE" | grep -q '^requirements.txt$'; then
   log "requirements.txt changed; installing"

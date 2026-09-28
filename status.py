@@ -166,7 +166,11 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0"))
             q = parse_qs(self.rfile.read(length).decode("utf-8", "replace"))
             choice = q.get("pattern", [""])[0]
-            set_override(choice if choice in GAMES + OTHERS else None)
+            try:
+                set_override(choice if choice in GAMES + OTHERS else None)
+            except OSError as exc:
+                self._send(f"could not save your choice: {exc}\n\nOn the Pi run:  sudo install -d -o pi -g pi {RUN_DIR}", code=500)
+                return
             self.send_response(303)
             self.send_header("Location", "/")
             self.end_headers()
