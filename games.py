@@ -48,34 +48,42 @@ class Game:
 class Runner(Game):
     """Side-scroller: an original little runner hops gaps and blocks; clouds drift behind."""
     speed = 3
-    SKY, GROUND, BLOCK, BODY, HEAD, COIN, CLOUD = (0, 0, 8), (60, 40, 0), (170, 60, 0), (0, 170, 220), (240, 200, 120), (255, 200, 0), (40, 40, 60)
+    GROUND, BLOCK, COIN, CLOUD = (60, 40, 0), (170, 60, 0), (255, 200, 0), (40, 40, 60)
+    HEAD, SHIRT, PANTS, SKIN = (250, 210, 150), (40, 120, 255), (30, 40, 150), (250, 210, 150)
+    RX = 1                                   # runner's left column
+    # 3-wide x 4-tall poses: rows top->bottom; H head, T torso, A arm, L leg, . empty
+    POSES = {
+        "stride": (".H.", "AT.", ".TA", "L.L"),
+        "stand":  (".H.", ".TA", "AT.", ".L."),
+        "jump":   (".H.", "ATA", ".T.", "L.L"),
+    }
 
     def reset(self):
         self.ground = deque([1] * self.w, maxlen=self.w)     # 1 = ground present
         self.blocks = deque([0] * self.w, maxlen=self.w)     # block height on that column
         self.clouds = [(random.randrange(self.w), random.randrange(0, 2)) for _ in range(2)]
         self.t = 0
-        self.jump = 0            # frames left in jump arc
+        self.jump = 0            # ticks left in jump arc
         self.coin = 0
-        self.gap_cooldown = 4
+        self.gap_cooldown = 5
 
     def tick(self):
         self.t += 1
-        # scroll world
         self.gap_cooldown -= 1
         r = random.random()
         if self.gap_cooldown <= 0 and r < 0.12:
-            self.ground.append(0); self.blocks.append(0); self.gap_cooldown = 6
+            self.ground.append(0); self.blocks.append(0); self.gap_cooldown = 7
         elif self.gap_cooldown <= 0 and r < 0.24:
-            self.ground.append(1); self.blocks.append(random.choice((1, 1, 2))); self.gap_cooldown = 6
+            self.ground.append(1); self.blocks.append(random.choice((1, 1, 2))); self.gap_cooldown = 7
         else:
             self.ground.append(1); self.blocks.append(0)
         if self.t % 3 == 0:
             self.clouds = [((x - 1) % self.w, y) for x, y in self.clouds]
-        # jump when an obstacle is 2 columns ahead of the runner (runner at x=1)
-        ahead = 3
-        if self.jump == 0 and (not self.ground[ahead] or self.blocks[ahead] or not self.ground[ahead - 1]):
-            self.jump = 6
+        # jump when trouble is just ahead of the feet (feet span RX..RX+2)
+        ahead = self.RX + 3
+        trouble = any(not self.ground[x] or self.blocks[x] for x in range(ahead, min(ahead + 2, self.w)))
+        if self.jump == 0 and trouble:
+            self.jump = 7
         elif self.jump:
             self.jump -= 1
         if self.coin:
@@ -91,18 +99,19 @@ class Runner(Game):
                 g[base][x] = self.GROUND
                 for k in range(self.blocks[x]):
                     g[base - 1 - k][x] = self.BLOCK
-        arc = (0, 1, 2, 2, 2, 1, 0)
-        lift = arc[6 - self.jump] if self.jump else 0
-        fy = base - 1 - lift                       # feet row
-        x = 1
-        legs = self.BODY if (self.t // 2) % 2 == 0 or self.jump else dim(self.BODY, 0.5)
-        self.put(g, x, fy, legs)
-        self.put(g, x, fy - 1, self.BODY)
-        self.put(g, x, fy - 2, self.HEAD)
+        arc = (0, 1, 2, 3, 3, 2, 1, 0)
+        lift = arc[7 - self.jump] if self.jump else 0
+        pose = self.POSES["jump"] if self.jump else self.POSES["stride" if (self.t // 2) % 2 == 0 else "stand"]
+        top = base - 4 - lift                    # row of the head
+        colours = {"H": self.HEAD, "T": self.SHIRT, "A": self.SKIN, "L": self.PANTS}
+        for dy, row in enumerate(pose):
+            for dx, ch in enumerate(row):
+                if ch != ".":
+                    self.put(g, self.RX + dx, top + dy, colours[ch])
         if boost:
             self.coin = 3
         if self.coin:
-            self.put(g, x + 1, fy - 3, self.COIN)
+            self.put(g, self.RX + 3, top - 1, self.COIN)
         return g
 
 
@@ -197,12 +206,15 @@ class Pong(Game):
         nx, ny = self.bx + self.vx, self.by + self.vy
         if ny < 0 or ny >= self.h:
             self.vy = -self.vy; ny = self.by + self.vy
-        # paddles chase the ball (imperfectly)
-        for attr in ("ly", "ry"):
+        # paddles track where the ball is heading; the far paddle occasionally naps
+        for attr, near in (("ly", self.vx < 0), ("ry", self.vx > 0)):
             py = getattr(self, attr)
-            target = self.by - 1
-            if random.random() < 0.8:
+            target = ny if ny <= py else ny - 1          # keep the ball within the 2-pixel paddle
+            target = max(0, min(self.h - 2, target))
+            if near or random.random() < 0.6:
                 py += (target > py) - (target < py)
+            if near and random.random() < 0.04:          # the deliberate whiff
+                py -= (target > py) - (target < py)
             setattr(self, attr, max(0, min(self.h - 2, py)))
         if nx == 0 and self.ly <= ny <= self.ly + 1 or nx == self.w - 1 and self.ry <= ny <= self.ry + 1:
             self.vx = -self.vx; nx = self.bx + self.vx
