@@ -36,6 +36,7 @@ import games
 BASE_DIR = Path(__file__).resolve().parent
 LOG_DIR = BASE_DIR / "logs"
 OVERRIDE_FILE = BASE_DIR / "run" / "override.json"   # written by status.py when you pick a game on the web page
+ROTATION_FILE = BASE_DIR / "run" / "rotation.json"   # written by status.py: which patterns are in the rotation
 load_dotenv(BASE_DIR / ".env")
 
 # ---------------------------------------------------------------- settings --
@@ -47,7 +48,7 @@ TETRIS_COLORS = os.getenv("TETRIS_COLORS", "1") == "1"  # tetris: classic piece 
 PATTERN_ROTATE = int(os.getenv("PATTERN_ROTATE", "30"))  # minutes per pattern when PATTERNS lists more than one (0 = never rotate)
 PATTERNS = [p.strip().lower() for p in os.getenv(
     "PATTERNS", "tetris,runner,climber,pong,snake,breakout,invaders,frogger,racer,simon,missile,asteroids,"
-                "cave,flappy,centipede,tanks,lander,pinball,lightsout,skiing,digger").split(",") if p.strip()]
+                "cave,flappy,centipede,tanks,lander,pinball,lightsout,skiing,digger,maze").split(",") if p.strip()]
 PATTERN_NAMES = ("tetris", "ripple", "bars", "sonar", "ekg") + tuple(games.GAMES)   # everything the split layout can draw
 MAIN_PATTERN = os.getenv("MAIN_PATTERN", "tetris").lower()  # used when PATTERN_ROTATE=0: tetris | runner | climber | pong | snake | breakout | invaders | frogger | racer | ripple | bars | sonar | ekg
 BETA_PATTERN = os.getenv("BETA_PATTERN", "tetris").lower()  # SPLIT=lr/tb only, same choices
@@ -536,6 +537,7 @@ class Panel(threading.Thread):
                 self.strip.setPixelColor(self._pxy(xx, y0 + yy), self._Color(r, g, b))
 
     _override = (0.0, None)      # (last check time, pattern name or None)
+    _rotation = (0.0, None)      # (last check time, list from the web page or None)
     _BANNER_RGB = (255, 255, 255)
 
     def _current_pattern(self, default: str) -> str:
@@ -554,10 +556,21 @@ class Panel(threading.Thread):
             self._override = (now, choice)
         if choice:
             return choice
-        if PATTERN_ROTATE <= 0 or len(PATTERNS) < 2:
-            return default
+        checked, rotation = self._rotation
+        if now - checked > 5.0:
+            rotation = None
+            try:
+                data = json.loads(ROTATION_FILE.read_text())
+                lst = [p for p in data.get("patterns", []) if p in PATTERN_NAMES]
+                rotation = lst or None
+            except (OSError, ValueError, AttributeError):
+                pass
+            self._rotation = (now, rotation)
+        patterns = rotation or PATTERNS
+        if PATTERN_ROTATE <= 0 or len(patterns) < 2:
+            return patterns[0] if patterns else default
         slot = int(now // (PATTERN_ROTATE * 60))
-        return PATTERNS[slot % len(PATTERNS)]
+        return patterns[slot % len(patterns)]
 
     def _pulse_net(self) -> None:
         """Slow purple breathing pulse over the whole panel while the internet is out."""

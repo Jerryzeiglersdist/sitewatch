@@ -18,7 +18,7 @@ the idle animation rotates through `PATTERNS` every `PATTERN_ROTATE` minutes
 (default: a set of self-playing retro-style mini-games from `games.py` -
 tetris, runner, climber, pong, snake, breakout, invaders, frogger, racer, simon,
 missile command, asteroids, cave flyer, flappy, centipede, tanks, lunar lander,
-pinball, lights out, skiing, digger - each flashing or pulsing on every good check). Set `PATTERN_ROTATE=0` to stay on
+pinball, lights out, skiing, digger, maze - each flashing or pulsing on every good check). Set `PATTERN_ROTATE=0` to stay on
 `MAIN_PATTERN` (`BETA_PATTERN` for the beta half in `lr`/`tb` layouts). Other
 patterns: `tetris` is an auto-playing Tetris in classic piece colours (`TETRIS_COLORS=0`
 for the site's colour) whose stack pulses on every good check,
@@ -90,8 +90,9 @@ saving, which on a Pi 3 can stall the connection and look like an internet outag
 `sitewatch-status.service` serves a read-only page on the LAN at
 `http://sitewatch.local:8080/`: current state of both sites, recent events, the
 log tail, and `/health` as JSON. It also has a row of buttons to pin the panel
-to a particular game (or back to `auto` rotation); that is the only thing it can
-change, via `run/override.json`. Everything else is read-only.
+to a particular game (or back to `auto` rotation) and checkboxes to choose which
+games are in the rotation; those are the only things it can change, via
+`run/override.json` and `run/rotation.json`. Everything else is read-only.
 
 ## Check it
 

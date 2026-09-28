@@ -23,6 +23,7 @@ BASE_DIR = Path(__file__).resolve().parent
 LOG_DIR = BASE_DIR / "logs"
 RUN_DIR = BASE_DIR / "run"
 OVERRIDE_FILE = RUN_DIR / "override.json"
+ROTATION_FILE = RUN_DIR / "rotation.json"
 PORT = int(os.getenv("STATUS_PORT", "8080"))
 try:
     from games import GAMES as _GAMES
@@ -40,6 +41,18 @@ def current_override() -> str | None:
     except (OSError, ValueError):
         pass
     return None
+
+
+def current_rotation() -> list | None:
+    try:
+        return json.loads(ROTATION_FILE.read_text()).get("patterns") or None
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def set_rotation(patterns: list) -> None:
+    RUN_DIR.mkdir(exist_ok=True)
+    ROTATION_FILE.write_text(json.dumps({"patterns": patterns}))
 
 
 def set_override(pattern: str | None) -> None:
@@ -134,6 +147,7 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>sitewatch</tit
  a{{color:#8cf}} small{{color:#888}}
  button{{margin:.2rem;padding:.5rem .9rem;border:0;border-radius:6px;background:#333;color:#eee;font-size:1rem;cursor:pointer}}
  button.on{{background:#3c3;color:#000;font-weight:600}}
+ label{{display:inline-block;margin:.2rem .6rem .2rem 0;padding:.3rem .5rem;background:#222;border-radius:6px}}
 </style></head><body>
 <h1>sitewatch</h1>
 <div class="tile {main_cls}">zeiglersdist.com: {main}</div>
@@ -144,6 +158,10 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>sitewatch</tit
 <h2>Pick the game</h2>
 <form method="post" action="/set">{buttons}</form>
 <p><small>{now_playing}</small></p>
+<h2>Rotation</h2>
+<form method="post" action="/rotation">{rotation}<br><button type="submit">save rotation</button>
+<button type="submit" name="all" value="1">all games</button></form>
+<p><small>{rotation_note}</small></p>
 <h2>Events, last 24 h</h2>
 <pre>{events}</pre>
 <h2>Last 40 log lines</h2>
@@ -166,6 +184,21 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         url = urlparse(self.path)
+        if url.path == "/rotation":
+            length = int(self.headers.get("Content-Length", "0"))
+            q = parse_qs(self.rfile.read(length).decode("utf-8", "replace"))
+            chosen = [n for n in GAMES + OTHERS if n in q.get("p", [])]
+            if q.get("all"):
+                chosen = list(GAMES)
+            try:
+                set_rotation(chosen)
+            except OSError as exc:
+                self._send(f"could not save: {exc}", code=500)
+                return
+            self.send_response(303)
+            self.send_header("Location", "/")
+            self.end_headers()
+            return
         if url.path == "/set":
             length = int(self.headers.get("Content-Length", "0"))
             q = parse_qs(self.rfile.read(length).decode("utf-8", "replace"))
@@ -201,8 +234,14 @@ class Handler(BaseHTTPRequestHandler):
                 f'<button name="pattern" value="{n}" class="{"on" if n == ov else ""}">{n}</button>'
                 for n in GAMES + OTHERS)
             buttons = f'<button name="pattern" value="" class="{"on" if not ov else ""}">auto (rotate)</button>' + buttons
+            rot = current_rotation() or list(GAMES)
+            rotation = "".join(
+                f'<label><input type="checkbox" name="p" value="{n}" {"checked" if n in rot else ""}> {n}</label>'
+                for n in GAMES + OTHERS)
             self._send(PAGE.format(
                 buttons=buttons,
+                rotation=rotation,
+                rotation_note=f"{len(rot)} in the rotation; each runs PATTERN_ROTATE minutes (from .env)",
                 now_playing=f"pinned to {ov} until you press auto" if ov else "rotating through the list every PATTERN_ROTATE minutes",
                 main=s["main"], beta=s["beta"], internet=s["internet"],
                 main_cls="NET" if net_down else s["main"], beta_cls="NET" if net_down else s["beta"],

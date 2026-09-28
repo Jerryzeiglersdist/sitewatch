@@ -1290,6 +1290,108 @@ class Digger(Game):
         return g
 
 
+
+# -------------------------------------------------------------------- maze --
+class Maze(Game):
+    """An original muncher clears dots from a little maze while two chasers hunt it;
+    a power pellet turns the tables for a while."""
+    speed = 3
+    WALL, DOT, PELLET, MUNCH, CHASER, SCARED = (30, 30, 120), (255, 200, 140), (255, 255, 255), (0, 230, 120), (255, 90, 0), (60, 60, 255)
+    LAYOUT = (
+        "........",
+        ".##..##.",
+        "........",
+        "#..##..#",
+        "........",
+        ".##..##.",
+        "........",
+        "........",
+    )
+
+    def reset(self):
+        self.walls = {(x, y) for y, row in enumerate(self.LAYOUT[:self.h]) for x, ch in enumerate(row[:self.w]) if ch == "#"}
+        self.dots = {(x, y) for y in range(self.h) for x in range(self.w) if (x, y) not in self.walls}
+        self.pellets = {(0, 0), (self.w - 1, self.h - 1)}
+        self.dots -= self.pellets
+        self.mx, self.my = self.w // 2, self.h - 1
+        self.dots.discard((self.mx, self.my))
+        self.chasers = [[0, self.h // 2 - 1], [self.w - 1, self.h // 2 - 1]]
+        self.power = 0
+        self.t = 0
+        self.over = 0
+
+    def _free(self, x, y):
+        return 0 <= x < self.w and 0 <= y < self.h and (x, y) not in self.walls
+
+    def _step_toward(self, fx, fy, tx, ty, flee=False):
+        opts = [(fx + dx, fy + dy) for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)) if self._free(fx + dx, fy + dy)]
+        if not opts:
+            return fx, fy
+        key = lambda p: abs(p[0] - tx) + abs(p[1] - ty)
+        opts.sort(key=key, reverse=flee)
+        return opts[0] if random.random() < 0.8 else random.choice(opts)
+
+    def tick(self):
+        self.t += 1
+        if self.over:
+            self.over -= 1
+            if self.over == 0:
+                self.reset()
+            return
+        if self.power:
+            self.power -= 1
+        # muncher: head for the nearest dot (or the nearest chaser when powered up), away from chasers otherwise
+        targets = self.dots | self.pellets
+        near = min(self.chasers, key=lambda c: abs(c[0] - self.mx) + abs(c[1] - self.my))
+        danger = abs(near[0] - self.mx) + abs(near[1] - self.my) <= 3 and not self.power
+        def safe(p):
+            return self.power or all(abs(c[0] - p[0]) + abs(c[1] - p[1]) >= 2 for c in self.chasers)
+
+        if self.power and self.chasers:
+            tx, ty = near
+            self.mx, self.my = self._step_toward(self.mx, self.my, tx, ty)
+        else:
+            opts = [(self.mx + dx, self.my + dy) for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))
+                    if self._free(self.mx + dx, self.my + dy) and safe((self.mx + dx, self.my + dy))]
+            if opts:
+                if danger:
+                    opts.sort(key=lambda p: -(abs(p[0] - near[0]) + abs(p[1] - near[1])))
+                elif targets:
+                    tx, ty = min(targets, key=lambda d: abs(d[0] - self.mx) + abs(d[1] - self.my))
+                    opts.sort(key=lambda p: abs(p[0] - tx) + abs(p[1] - ty))
+                self.mx, self.my = opts[0] if random.random() < 0.85 else random.choice(opts)
+        self.dots.discard((self.mx, self.my))
+        if (self.mx, self.my) in self.pellets:
+            self.pellets.discard((self.mx, self.my)); self.power = 12
+        if not self.dots and not self.pellets:
+            self.banner = "CLEAR!"; self.over = 4; return
+        # chasers move two ticks in three, toward the muncher (or away when it's powered up)
+        if self.t % 3:
+            for c in self.chasers:
+                if random.random() < 0.75:
+                    c[0], c[1] = self._step_toward(c[0], c[1], self.mx, self.my, flee=bool(self.power))
+        for c in self.chasers:
+            if (c[0], c[1]) == (self.mx, self.my):
+                if self.power:
+                    c[0], c[1] = self.w // 2 + random.choice((-1, 0)), self.h // 2      # sent home
+                else:
+                    self.banner = "GAME OVER"; self.over = 6; return
+
+    def render(self, boost=False):
+        g = self.blank()
+        for x, y in self.walls:
+            self.put(g, x, y, self.WALL)
+        for x, y in self.dots:
+            self.put(g, x, y, dim(self.DOT, 0.35))
+        for x, y in self.pellets:
+            self.put(g, x, y, self.PELLET if self.t % 2 else dim(self.PELLET, 0.4))
+        for c in self.chasers:
+            self.put(g, c[0], c[1], (self.SCARED if self.power % 2 or self.power > 4 else self.CHASER) if self.power else self.CHASER)
+        mc = (255, 255, 255) if (self.over % 2) or boost else self.MUNCH
+        self.put(g, self.mx, self.my, mc if self.t % 2 else dim(mc, 0.6))     # "chomp" flicker
+        return g
+
+
 GAMES = {
     "runner": Runner,
     "climber": Climber,
@@ -1311,4 +1413,5 @@ GAMES = {
     "lightsout": LightsOut,
     "skiing": Skiing,
     "digger": Digger,
+    "maze": Maze,
 }
