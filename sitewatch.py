@@ -30,6 +30,8 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
+import games
+
 BASE_DIR = Path(__file__).resolve().parent
 LOG_DIR = BASE_DIR / "logs"
 load_dotenv(BASE_DIR / ".env")
@@ -40,8 +42,11 @@ BETA_URL = os.getenv("BETA_URL", "")                   # optional second site sh
 LAYOUT = os.getenv("LAYOUT", "split").lower()          # split: two half-panels, one per site | strip: beta as a bottom strip
 SPLIT = os.getenv("SPLIT", "full").lower()             # split layout: full = one game over the whole panel, a half flashes when its site is down | lr = live left / beta right | tb = live top / beta bottom
 TETRIS_COLORS = os.getenv("TETRIS_COLORS", "1") == "1"  # tetris: classic piece colours (else the site colour)
-MAIN_PATTERN = os.getenv("MAIN_PATTERN", "tetris").lower()  # split layout, top half:  tetris | ripple | bars | sonar | ekg
-BETA_PATTERN = os.getenv("BETA_PATTERN", "tetris").lower()  # split layout, bottom half: tetris | ripple | bars | sonar | ekg
+PATTERN_ROTATE = int(os.getenv("PATTERN_ROTATE", "30"))  # minutes per pattern when PATTERNS lists more than one (0 = never rotate)
+PATTERNS = [p.strip().lower() for p in os.getenv(
+    "PATTERNS", "tetris,runner,climber,pong,snake,breakout,invaders,frogger,racer").split(",") if p.strip()]
+MAIN_PATTERN = os.getenv("MAIN_PATTERN", "tetris").lower()  # used when PATTERN_ROTATE=0: tetris | runner | climber | pong | snake | breakout | invaders | frogger | racer | ripple | bars | sonar | ekg
+BETA_PATTERN = os.getenv("BETA_PATTERN", "tetris").lower()  # SPLIT=lr/tb only, same choices
 BAR_SCALE = float(os.getenv("BAR_SCALE", "2.0"))           # bars: response time (s) that fills the full height
 BETA_ROWS = int(os.getenv("BETA_ROWS", "2"))           # strip layout only: how many bottom rows the beta strip uses
 BETA_UP_COLOR = tuple(int(v) for v in os.getenv("BETA_UP_COLOR", "255,70,0").split(","))     # orange
@@ -112,6 +117,7 @@ class Panel(threading.Thread):
         self.last_ok = {"main": 0.0, "beta": 0.0}   # monotonic time of the last successful check
         self._halt = threading.Event()
         self._tetris = {}
+        self._games = {}                        # (name, which) -> (game instance, frame counter)
         self._x0, self._rw = 0, PANEL_WIDTH     # current draw region: x offset and width (set by _run_split)
         from rpi_ws281x import PixelStrip, Color  # imported here so --test on a PC can stub it
         self._Color = Color
@@ -440,6 +446,29 @@ class Panel(threading.Thread):
                 if py >= 0:
                     self.strip.setPixelColor(self._pxy(st["x"] + dx, y0 + py), c)
 
+    def _draw_game(self, name: str, y0: int, rows: int, which: str) -> None:
+        """Run one of the games.py mini-games inside the current region."""
+        key = (name, which)
+        if key not in self._games:
+            self._games[key] = [games.GAMES[name](self._rw, rows), 0]
+        game, frame = self._games[key]
+        frame += 1
+        self._games[key][1] = frame
+        if frame % game.speed == 0:
+            game.tick()
+        boost = time.monotonic() - self.last_ok[which] < 0.4
+        for yy, row in enumerate(game.render(boost)):
+            for xx, (r, g, b) in enumerate(row):
+                self.strip.setPixelColor(self._pxy(xx, y0 + yy), self._Color(r, g, b))
+
+    @staticmethod
+    def _current_pattern(default: str) -> str:
+        """Which idle pattern to show now: rotates through PATTERNS on the wall clock."""
+        if PATTERN_ROTATE <= 0 or len(PATTERNS) < 2:
+            return default
+        slot = int(time.time() // (PATTERN_ROTATE * 60))
+        return PATTERNS[slot % len(PATTERNS)]
+
     def _pulse_net(self) -> None:
         """Slow purple breathing pulse over the whole panel while the internet is out."""
         steps = 30
@@ -475,12 +504,12 @@ class Panel(threading.Thread):
             if SPLIT == "full":
                 # one animation over the whole panel; a down site flashes its own half on top of it
                 self.last_ok["full"] = max(self.last_ok["main"], self.last_ok["beta"])
-                regions = ((full_box, UP, main_up, main_down, 0, "full", MAIN_PATTERN),
+                regions = ((full_box, UP, main_up, main_down, 0, "full", self._current_pattern(MAIN_PATTERN)),
                            (main_box, self.mode, None, main_down, 0, "main", None),
                            (beta_box, beta, None, BETA_DOWN_COLOR, 0, "beta", None))
             else:
-                regions = ((main_box, self.mode, main_up, main_down, 0, "main", MAIN_PATTERN),
-                           (beta_box, beta, BETA_UP_COLOR, BETA_DOWN_COLOR, n // 3, "beta", BETA_PATTERN))
+                regions = ((main_box, self.mode, main_up, main_down, 0, "main", self._current_pattern(MAIN_PATTERN)),
+                           (beta_box, beta, BETA_UP_COLOR, BETA_DOWN_COLOR, n // 3, "beta", self._current_pattern(BETA_PATTERN)))
             for p in range(LED_COUNT):
                 self.strip.setPixelColor(p, self._Color(0, 0, 0))
             for (x0, rw, y0, rows), state, up_c, down_c, phase, which, pattern in regions:
@@ -496,6 +525,8 @@ class Panel(threading.Thread):
                         self._draw_sonar(y0, rows, up_c, which)
                     elif pattern == "tetris":
                         self._draw_tetris(y0, rows, up_c, which)
+                    elif pattern in games.GAMES:
+                        self._draw_game(pattern, y0, rows, which)
                     elif pattern == "ripple":
                         self._draw_ripple(y0, rows, up_c, which, 1.2 if which == "beta" else 0.0)
                     else:

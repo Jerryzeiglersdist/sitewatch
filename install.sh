@@ -17,7 +17,7 @@ apt-get install -y -qq python3-venv python3-dev build-essential
 
 echo "==> Copying files to $DEST"
 mkdir -p "$DEST"
-cp "$SRC_DIR"/sitewatch.py "$SRC_DIR"/status.py "$SRC_DIR"/update.sh "$SRC_DIR"/requirements.txt "$SRC_DIR"/*.service "$SRC_DIR"/*.timer "$DEST"/
+cp "$SRC_DIR"/sitewatch.py "$SRC_DIR"/games.py "$SRC_DIR"/status.py "$SRC_DIR"/update.sh "$SRC_DIR"/requirements.txt "$SRC_DIR"/*.service "$SRC_DIR"/*.timer "$DEST"/
 chmod +x "$DEST"/*.sh
 [[ -f "$DEST/.env" ]] || cp "$SRC_DIR/.env.example" "$DEST/.env"
 

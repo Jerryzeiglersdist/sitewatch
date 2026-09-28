@@ -39,7 +39,7 @@ for unit in sitewatch.service sitewatch-status.service sitewatch-update.service 
 done
 [[ "${RELOAD:-}" ]] && systemctl daemon-reload
 
-if git diff --name-only "$LOCAL" "$REMOTE" | grep -qE '^(sitewatch\.py|sitewatch\.service)$'; then
+if git diff --name-only "$LOCAL" "$REMOTE" | grep -qE '^(sitewatch\.py|games\.py|sitewatch\.service)$'; then
   systemctl restart sitewatch && log "sitewatch restarted"
 fi
 if git diff --name-only "$LOCAL" "$REMOTE" | grep -qE '^(status\.py|sitewatch-status\.service)$'; then

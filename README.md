@@ -14,8 +14,12 @@ over the whole panel while both sites are up; if the live site goes down the
 left half flashes red over it, and if the Aldrich beta goes down the right half
 flashes yellow. `SPLIT=lr` or `SPLIT=tb` instead gives each site its own half
 with its own animation. Each half reacts on its own, and
-each picks its idle animation with `MAIN_PATTERN` / `BETA_PATTERN`: `tetris`
-(default) is an auto-playing Tetris in classic piece colours (`TETRIS_COLORS=0`
+the idle animation rotates through `PATTERNS` every `PATTERN_ROTATE` minutes
+(default: a set of self-playing retro-style mini-games from `games.py` -
+tetris, runner, climber, pong, snake, breakout, invaders, frogger, racer - each
+flashing or pulsing on every good check). Set `PATTERN_ROTATE=0` to stay on
+`MAIN_PATTERN` (`BETA_PATTERN` for the beta half in `lr`/`tb` layouts). Other
+patterns: `tetris` is an auto-playing Tetris in classic piece colours (`TETRIS_COLORS=0`
 for the site's colour) whose stack pulses on every good check,
 `ripple` is a ring pulsing out from the centre with a white spark on every good
 check, `bars` shows the last 8 response times as a bar chart (taller = slower,
