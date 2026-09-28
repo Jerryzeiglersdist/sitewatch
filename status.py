@@ -113,6 +113,8 @@ def summarize() -> dict:
         if not m:
             continue
         msg = m["msg"]
+        if msg.startswith("Watching"):                       # service (re)started: it begins from a clean slate
+            state["main"] = state["beta"] = state["internet"] = "UP"
         if "Beta site is DOWN" in msg:
             state["beta"] = "DOWN"
         elif "Beta site is BACK UP" in msg:
