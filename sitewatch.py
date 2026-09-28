@@ -19,6 +19,7 @@ Log files older than LOG_RETENTION_DAYS are deleted at startup and once a day.
 import argparse
 import logging
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -449,6 +450,29 @@ def fetch_ok(url: str, must_contain: str = "") -> tuple[bool, str, float]:
     return True, f"HTTP {r.status_code} in {secs:.2f}s", secs
 
 
+def net_diag() -> str:
+    """Wi-Fi signal + router reachability, for telling 'Pi lost Wi-Fi' from 'ISP is down'."""
+    parts = []
+    try:
+        for line in Path("/proc/net/wireless").read_text().splitlines()[2:]:
+            f = line.split()
+            if f and f[0].startswith("wlan"):
+                parts.append(f"wifi link {f[2].rstrip('.')}/70 signal {f[3].rstrip('.')} dBm")
+    except OSError:
+        pass
+    try:
+        route = subprocess.run(["ip", "route", "show", "default"], capture_output=True, text=True, timeout=3).stdout.split()
+        gw = route[route.index("via") + 1] if "via" in route else ""
+        if gw:
+            ok = subprocess.run(["ping", "-c", "1", "-W", "2", gw], capture_output=True, timeout=5).returncode == 0
+            parts.append(f"router {gw} {'reachable' if ok else 'NOT reachable'}")
+        else:
+            parts.append("no default route (Wi-Fi down)")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        parts.append("router check failed")
+    return "; ".join(parts) or "no diag"
+
+
 def send_alert(log: logging.Logger, message: str) -> None:
     if not ALERT_WEBHOOK_URL:
         return
@@ -506,7 +530,7 @@ def monitor(log: logging.Logger, panel: Panel) -> None:
                 if ref_ok:
                     new_state = DOWN
                 else:
-                    log.warning("Reference site also failed (%d/%d): %s", ref_fails, NET_GRACE, ref_detail)
+                    log.warning("Reference site also failed (%d/%d): %s [%s]", ref_fails, NET_GRACE, ref_detail, net_diag())
                     if ref_fails >= NET_GRACE:      # a single Wi-Fi hiccup doesn't count as an outage
                         new_state = NET_DOWN
 

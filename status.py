@@ -45,13 +45,31 @@ def tail(path: Path | None, n: int) -> str:
     return "\n".join(lines[-n:])
 
 
+def wifi() -> str:
+    try:
+        for line in Path("/proc/net/wireless").read_text().splitlines()[2:]:
+            f = line.split()
+            if f and f[0].startswith("wlan"):
+                return f"link {f[2].rstrip('.')}/70, signal {f[3].rstrip('.')} dBm"
+    except OSError:
+        pass
+    return "n/a"
+
+
 def summarize() -> dict:
-    """Walk the newest log and work out the current state of each site."""
-    log = newest_log()
-    state = {"main": "UP", "beta": "UP", "internet": "UP", "since": None, "events": [], "log": str(log) if log else None}
+    """Walk the last 24 h of logs and work out the current state of each site."""
+    import time
+    logs = sorted(LOG_DIR.glob("sitewatch_*.log"), key=lambda p: p.stat().st_mtime)
+    recent = [p for p in logs if time.time() - p.stat().st_mtime < 86400] or logs[-1:]
+    log = logs[-1] if logs else None
+    state = {"main": "UP", "beta": "UP", "internet": "UP", "since": None, "events": [], "log": str(log) if log else None,
+             "wifi": wifi()}
     if not log:
         return state
-    for line in log.read_text(errors="replace").splitlines():
+    lines = []
+    for p in recent:
+        lines += p.read_text(errors="replace").splitlines()
+    for line in lines:
         m = STATE_RE.match(line)
         if not m:
             continue
@@ -66,10 +84,10 @@ def summarize() -> dict:
             state["main"], state["internet"] = "DOWN", "UP"
         elif "zeiglersdist.com is BACK UP" in msg:
             state["main"], state["internet"] = "UP", "UP"
-        if "Still up" not in msg:
+        if "Still up" not in msg and "TEST:" not in msg:
             state["events"].append(f"{m['ts']}  {msg}")
             state["since"] = m["ts"]
-    state["events"] = state["events"][-25:]
+    state["events"] = state["events"][-60:]
     state["service"] = subprocess.run(["systemctl", "is-active", "sitewatch"], capture_output=True, text=True).stdout.strip()
     try:
         state["commit"] = subprocess.run(["git", "-C", str(BASE_DIR), "log", "-1", "--format=%h %cd %s", "--date=short"],
@@ -93,9 +111,9 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>sitewatch</tit
 <div class="tile {main_cls}">zeiglersdist.com: {main}</div>
 <div class="tile {beta_cls}">Aldrich beta: {beta}</div>
 <div class="tile {net_cls}">internet: {internet}</div>
-<p><small>service: {service} &middot; version: {commit} &middot; page generated {checked_at} (auto-refreshes every 30 s)</small></p>
+<p><small>service: {service} &middot; Wi-Fi: {wifi} &middot; version: {commit} &middot; page generated {checked_at} (auto-refreshes every 30 s)</small></p>
 <p><a href="/log">full log tail</a> &middot; <a href="/update">update log</a> &middot; <a href="/health">json</a></p>
-<h2>Recent events</h2>
+<h2>Events, last 24 h</h2>
 <pre>{events}</pre>
 <h2>Last 40 log lines</h2>
 <pre>{tail}</pre>
@@ -121,7 +139,7 @@ class Handler(BaseHTTPRequestHandler):
         n = min(int(q.get("n", ["200"])[0]), 5000)
         if url.path == "/health":
             s = summarize()
-            self._send(json.dumps({k: s[k] for k in ("main", "beta", "internet", "service", "commit", "since", "checked_at")}),
+            self._send(json.dumps({k: s[k] for k in ("main", "beta", "internet", "wifi", "service", "commit", "since", "checked_at")}),
                        "application/json")
         elif url.path == "/log":
             self._send(tail(newest_log(), n))
@@ -134,7 +152,7 @@ class Handler(BaseHTTPRequestHandler):
                 main=s["main"], beta=s["beta"], internet=s["internet"],
                 main_cls="NET" if net_down else s["main"], beta_cls="NET" if net_down else s["beta"],
                 net_cls="NET" if net_down else "UP",
-                service=s["service"], commit=s["commit"] or "?", checked_at=s["checked_at"],
+                service=s["service"], wifi=s["wifi"], commit=s["commit"] or "?", checked_at=s["checked_at"],
                 events="\n".join(s["events"]) or "(none)", tail=tail(newest_log(), 40),
             ), "text/html; charset=utf-8")
         else:
