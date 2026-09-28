@@ -90,7 +90,7 @@ def summarize() -> dict:
     state["events"] = state["events"][-60:]
     state["service"] = subprocess.run(["systemctl", "is-active", "sitewatch"], capture_output=True, text=True).stdout.strip()
     try:
-        state["commit"] = subprocess.run(["git", "-C", str(BASE_DIR), "log", "-1", "--format=%h %cd %s", "--date=short"],
+        state["commit"] = subprocess.run(["git", "-c", "safe.directory=*", "-C", str(BASE_DIR), "log", "-1", "--format=%h %cd %s", "--date=short"],
                                          capture_output=True, text=True).stdout.strip()
     except OSError:
         state["commit"] = ""
