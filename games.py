@@ -20,8 +20,73 @@ def dim(c, f):
     return (int(c[0] * f), int(c[1] * f), int(c[2] * f))
 
 
+# ------------------------------------------------------------------ marquee --
+# 3x5 pixel font, one string per row, '#' = lit
+FONT = {
+    "A": ("###", "#.#", "###", "#.#", "#.#"), "B": ("##.", "#.#", "##.", "#.#", "##."),
+    "C": ("###", "#..", "#..", "#..", "###"), "D": ("##.", "#.#", "#.#", "#.#", "##."),
+    "E": ("###", "#..", "##.", "#..", "###"), "F": ("###", "#..", "##.", "#..", "#.."),
+    "G": ("###", "#..", "#.#", "#.#", "###"), "H": ("#.#", "#.#", "###", "#.#", "#.#"),
+    "I": ("###", ".#.", ".#.", ".#.", "###"), "J": ("..#", "..#", "..#", "#.#", "###"),
+    "K": ("#.#", "#.#", "##.", "#.#", "#.#"), "L": ("#..", "#..", "#..", "#..", "###"),
+    "M": ("#.#", "###", "###", "#.#", "#.#"), "N": ("##.", "#.#", "#.#", "#.#", "#.#"),
+    "O": ("###", "#.#", "#.#", "#.#", "###"), "P": ("###", "#.#", "###", "#..", "#.."),
+    "Q": ("###", "#.#", "#.#", "###", "..#"), "R": ("###", "#.#", "##.", "#.#", "#.#"),
+    "S": ("###", "#..", "###", "..#", "###"), "T": ("###", ".#.", ".#.", ".#.", ".#."),
+    "U": ("#.#", "#.#", "#.#", "#.#", "###"), "V": ("#.#", "#.#", "#.#", "#.#", ".#."),
+    "W": ("#.#", "#.#", "###", "###", "#.#"), "X": ("#.#", "#.#", ".#.", "#.#", "#.#"),
+    "Y": ("#.#", "#.#", ".#.", ".#.", ".#."), "Z": ("###", "..#", ".#.", "#..", "###"),
+    "0": ("###", "#.#", "#.#", "#.#", "###"), "1": (".#.", "##.", ".#.", ".#.", "###"),
+    "2": ("###", "..#", "###", "#..", "###"), "3": ("###", "..#", "###", "..#", "###"),
+    "4": ("#.#", "#.#", "###", "..#", "..#"), "5": ("###", "#..", "###", "..#", "###"),
+    "6": ("###", "#..", "###", "#.#", "###"), "7": ("###", "..#", "..#", "..#", "..#"),
+    "8": ("###", "#.#", "###", "#.#", "###"), "9": ("###", "#.#", "###", "..#", "###"),
+    " ": ("...", "...", "...", "...", "..."), "!": (".#.", ".#.", ".#.", "...", ".#."),
+    "-": ("...", "...", "###", "...", "..."), ".": ("...", "...", "...", "...", ".#."),
+}
+
+
+def text_columns(text):
+    """Render text into a list of columns; each column is a 5-bit list top->bottom."""
+    cols = []
+    for ch in text.upper():
+        glyph = FONT.get(ch, FONT[" "])
+        for x in range(3):
+            cols.append([glyph[y][x] == "#" for y in range(5)])
+        cols.append([False] * 5)                     # 1-pixel letter spacing
+    return cols
+
+
+class Marquee:
+    """Scrolls a line of text across a WxH grid, right to left, once."""
+
+    def __init__(self, text, w, h, color=(255, 255, 255)):
+        self.cols = text_columns(text)
+        self.w, self.h, self.color = w, h, color
+        self.offset = -w                               # start fully off the right edge
+        self.y = max(0, (h - 5) // 2)
+
+    @property
+    def done(self):
+        return self.offset >= len(self.cols)
+
+    def step(self):
+        self.offset += 1
+
+    def render(self):
+        g = [[OFF] * self.w for _ in range(self.h)]
+        for x in range(self.w):
+            i = self.offset + x
+            if 0 <= i < len(self.cols):
+                for dy, lit in enumerate(self.cols[i]):
+                    if lit and 0 <= self.y + dy < self.h:
+                        g[self.y + dy][x] = self.color
+        return g
+
+
 class Game:
-    speed = 4           # frames per tick (~22 fps host loop, so 4 = ~5 ticks/s)
+    speed = 4
+    banner = None            # set to a string (e.g. "GAME OVER") to have the host scroll it, then cleared           # frames per tick (~22 fps host loop, so 4 = ~5 ticks/s)
 
     def __init__(self, w, h):
         self.w, self.h = w, h
@@ -283,7 +348,7 @@ class Snake(Game):
             opts = [(nx, ny) for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1))
                     if 0 <= nx < self.w and 0 <= ny < self.h and (nx, ny) not in self.body]
             if not opts:
-                self.dead = 6
+                self.dead = 6; self.banner = "GAME OVER"
                 return
             step = random.choice(opts)
         self.body.appendleft(step)
@@ -336,7 +401,7 @@ class Breakout(Game):
             if random.random() < 0.3:
                 self.vx = random.choice((-1, 0, 1))
             if not self.bricks:
-                self.pause = 8
+                self.pause = 8; self.banner = "CLEAR!"
         # paddle follows the ball, with a little lag
         target = nx - 1
         if random.random() < 0.95:
@@ -396,7 +461,7 @@ class Invaders(Game):
                 for a in self.aliens:
                     a[1] += 1
                 if max(a[1] for a in self.aliens) >= self.h - 2:
-                    self.reset(); return
+                    self.banner = "GAME OVER"; self.reset(); return
             else:
                 for a in self.aliens:
                     a[0] += self.dx
@@ -459,7 +524,7 @@ class Frogger(Game):
                 self.fx, self.fy = self.w // 2, self.h - 1
             return
         if self._occupied(self.fx, self.fy):
-            self.dead = 6; return
+            self.dead = 6; self.banner = "GAME OVER"; return
         if self.fy == 0:
             if self.t % 4 == 0:
                 self.fx, self.fy = random.randrange(self.w), self.h - 1
@@ -528,7 +593,7 @@ class Racer(Game):
             if opts:
                 self.cx = random.choice(opts)
         if any(c[0] == self.cx and c[1] == self.h - 1 for c in self.traffic):
-            self.crash = 6
+            self.crash = 6; self.banner = "GAME OVER"
 
     def render(self, boost=False):
         g = self.blank()
@@ -575,7 +640,7 @@ class Simon(Game):
         else:
             if len(self.seq) >= 8:
                 self.seq = []
-                self.lit = "win"; self.on = 4
+                self.lit = "win"; self.on = 4; self.banner = "WIN!"
             self.seq.append(random.randrange(4))
             self.phase = "show"
 
@@ -639,7 +704,7 @@ class MissileCommand(Game):
             keep.append(m)
         self.missiles = keep
         if not self.cities:
-            self.pause = 10
+            self.pause = 10; self.banner = "GAME OVER"
 
     def render(self, boost=False):
         g = self.blank()
@@ -761,7 +826,7 @@ class CaveFlyer(Game):
         top, bot = self.cols[2]
         if not (top < int(round(self.y)) < bot):
             if random.random() < 0.15:                      # now and then it really does clip the wall
-                self.crash = 6
+                self.crash = 6; self.banner = "GAME OVER"
             else:
                 self.y = max(top + 1, min(bot - 1, self.y))
 
@@ -811,7 +876,7 @@ class Flappy(Game):
         yi = int(round(self.y))
         if gt is not None and not (gt <= yi <= gt + 2):
             if random.random() < 0.3:
-                self.crash = 6
+                self.crash = 6; self.banner = "GAME OVER"
             else:
                 self.y = float(max(gt, min(gt + 2, yi)))
 
@@ -858,7 +923,7 @@ class Centipede(Game):
             self.body.appendleft((nx, hy))
             self.body.pop()
             if hy >= self.h - 1:
-                self.pause = 6
+                self.pause = 6; self.banner = "GAME OVER"
         # gun shadows the head and shoots
         if self.body:
             self.gx += (self.body[0][0] > self.gx) - (self.body[0][0] < self.gx)
@@ -981,6 +1046,8 @@ class LunarLander(Game):
             self.y = self.h - 2
             self.ok = self.vy < 0.9 and self.pad <= round(self.x) <= self.pad + 1
             self.done = 8
+            if not self.ok:
+                self.banner = "CRASH"
 
     def render(self, boost=False):
         g = self.blank()
@@ -1207,7 +1274,7 @@ class Digger(Game):
                     best = min(steps, key=lambda p: abs(p[0] - self.mx) + abs(p[1] - self.my))
                     c[0], c[1] = best if random.random() < 0.7 else random.choice(steps)
                 if (c[0], c[1]) == (self.mx, self.my):
-                    self.caught = 6
+                    self.caught = 6; self.banner = "GAME OVER"
 
     def render(self, boost=False):
         g = self.blank()

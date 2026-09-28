@@ -122,6 +122,7 @@ class Panel(threading.Thread):
         self._halt = threading.Event()
         self._tetris = {}
         self._games = {}                        # (name, which) -> (game instance, frame counter)
+        self._marquee = {}                      # which -> Marquee currently scrolling a banner
         self._x0, self._rw = 0, PANEL_WIDTH     # current draw region: x offset and width (set by _run_split)
         from rpi_ws281x import PixelStrip, Color  # imported here so --test on a PC can stub it
         self._Color = Color
@@ -414,11 +415,23 @@ class Panel(threading.Thread):
             full = sum(1 for r in range(rows) if all(grid[r][c] or (c, r) in filled for c in range(w)))
             return (rows - top) * 2 + holes * 4 - full * 6 + random.random()
 
+        marquee = self._marquee.get(which)
+        if marquee is not None:                             # scrolling GAME OVER
+            marquee.step()
+            if marquee.done:
+                self._marquee.pop(which, None)
+            else:
+                for yy, row in enumerate(marquee.render()):
+                    for xx, (r, g, b) in enumerate(row):
+                        self.strip.setPixelColor(self._pxy(xx, y0 + yy), self._Color(r, g, b))
+                return
         if st["flash"]:                                     # game over: blink then wipe
             st["flash"] -= 1
             if st["flash"] == 0:
                 for r in grid:
                     r[:] = [0] * w
+                if st.pop("banner", None):
+                    self._marquee[which] = games.Marquee("GAME OVER", w, rows, self._BANNER_RGB)
         elif st["piece"] is None:
             kind = random.randrange(7)
             base = self._TETROMINOES[kind]
@@ -432,7 +445,7 @@ class Panel(threading.Thread):
                         best = (sc, rot, x)
                 cells = self._rot(cells)
             if best is None:
-                st["flash"] = 8
+                st["flash"] = 8; st["banner"] = True
             else:
                 pw = max(dx for dx, _ in base) + 1
                 st.update(piece=base, kind=kind + 1, rot=0, trot=best[1], tx=best[2],
@@ -455,7 +468,7 @@ class Panel(threading.Thread):
                 x, cells = st["x"], st["piece"]
                 if any(y + dy < 0 for _, dy in cells):
                     st["piece"] = None
-                    st["flash"] = 8
+                    st["flash"] = 8; st["banner"] = True
                 else:
                     for dx, dy in cells:
                         grid[y + dy][x + dx] = st["kind"]
@@ -495,14 +508,29 @@ class Panel(threading.Thread):
         game, frame = self._games[key]
         frame += 1
         self._games[key][1] = frame
-        if frame % game.speed == 0:
-            game.tick()
+        marquee = self._marquee.get(which)
+        if marquee is None:
+            if frame % game.speed == 0:
+                game.tick()
+            if game.banner:                                 # the game just ended: scroll its message
+                self._marquee[which] = marquee = games.Marquee(game.banner, self._rw, rows, self._BANNER_RGB)
+                game.banner = None
+        if marquee is not None:
+            marquee.step()
+            if marquee.done:
+                self._marquee.pop(which, None)
+            else:
+                for yy, row in enumerate(marquee.render()):
+                    for xx, (r, g, b) in enumerate(row):
+                        self.strip.setPixelColor(self._pxy(xx, y0 + yy), self._Color(r, g, b))
+                return
         boost = time.monotonic() - self.last_ok[which] < 0.4
         for yy, row in enumerate(game.render(boost)):
             for xx, (r, g, b) in enumerate(row):
                 self.strip.setPixelColor(self._pxy(xx, y0 + yy), self._Color(r, g, b))
 
     _override = (0.0, None)      # (last check time, pattern name or None)
+    _BANNER_RGB = (255, 255, 255)
 
     def _current_pattern(self, default: str) -> str:
         """Which idle pattern to show now: the web-page override if set, else the
