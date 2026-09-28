@@ -38,6 +38,8 @@ load_dotenv(BASE_DIR / ".env")
 SITE_URL = os.getenv("SITE_URL", "https://www.zeiglersdist.com/")
 BETA_URL = os.getenv("BETA_URL", "")                   # optional second site shown as a strip along the bottom
 LAYOUT = os.getenv("LAYOUT", "split").lower()          # split: two half-panels, one per site | strip: beta as a bottom strip
+SPLIT = os.getenv("SPLIT", "lr").lower()               # split layout: lr = live left / beta right | tb = live top / beta bottom
+TETRIS_COLORS = os.getenv("TETRIS_COLORS", "1") == "1"  # tetris: classic piece colours (else the site colour)
 MAIN_PATTERN = os.getenv("MAIN_PATTERN", "tetris").lower()  # split layout, top half:  tetris | ripple | bars | sonar | ekg
 BETA_PATTERN = os.getenv("BETA_PATTERN", "tetris").lower()  # split layout, bottom half: tetris | ripple | bars | sonar | ekg
 BAR_SCALE = float(os.getenv("BAR_SCALE", "2.0"))           # bars: response time (s) that fills the full height
@@ -110,6 +112,7 @@ class Panel(threading.Thread):
         self.last_ok = {"main": 0.0, "beta": 0.0}   # monotonic time of the last successful check
         self._halt = threading.Event()
         self._tetris = {}
+        self._x0, self._rw = 0, PANEL_WIDTH     # current draw region: x offset and width (set by _run_split)
         from rpi_ws281x import PixelStrip, Color  # imported here so --test on a PC can stub it
         self._Color = Color
         self.strip = PixelStrip(LED_COUNT, LED_PIN, brightness=LED_BRIGHTNESS)
@@ -212,6 +215,10 @@ class Panel(threading.Thread):
 
     # One heartbeat as a column-by-column trace height (0 = top row, 7 = bottom).
     # flat, P bump, flat, Q dip, R spike, S dip, flat, T bump, long flat.
+    def _pxy(self, x: int, y: int) -> int:
+        """Pixel index for (x, y) inside the current draw region."""
+        return self._xy(self._x0 + x, y)
+
     _EKG = [5, 5, 5, 5, 4, 4, 5, 5, 6, 0, 7, 5, 5, 5, 4, 3, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5]
 
     def _idle_ekg(self) -> None:
@@ -243,14 +250,14 @@ class Panel(threading.Thread):
 
     def _draw_trace(self, y0: int, rows: int, color: tuple, offset: int) -> None:
         """Draw one EKG trace in `color` into rows y0..y0+rows-1 (no show)."""
-        w = PANEL_WIDTH
+        w = self._rw
         n = len(self._EKG)
         wave = [round(v * (rows - 1) / 7) for v in self._EKG]
         cr, cg, cb = color
         base = tuple(max(1, c // 10) if c else 0 for c in color)
         for y in range(y0, y0 + rows):
             for x in range(w):
-                self.strip.setPixelColor(self._xy(x, y), self._Color(*base))
+                self.strip.setPixelColor(self._pxy(x, y), self._Color(*base))
         prev_y = None
         for x in range(w):
             y = wave[(offset + x) % n]
@@ -259,18 +266,18 @@ class Panel(threading.Thread):
             lo, hi = (y, y) if prev_y is None else (min(prev_y, y), max(prev_y, y))
             for yy in range(lo, hi + 1):
                 if 0 <= yy < rows:
-                    self.strip.setPixelColor(self._xy(x, y0 + yy), c)
+                    self.strip.setPixelColor(self._pxy(x, y0 + yy), c)
             prev_y = y
 
     def _draw_bars(self, y0: int, rows: int, color: tuple, which: str) -> None:
         """Last N response times as a bar chart, newest on the right, taller = slower."""
-        w = PANEL_WIDTH
+        w = self._rw
         hist = list(self.hist[which])
         cr, cg, cb = color
         base = tuple(max(1, c // 12) if c else 0 for c in color)
         for y in range(y0, y0 + rows):
             for x in range(w):
-                self.strip.setPixelColor(self._xy(x, y), self._Color(*base))
+                self.strip.setPixelColor(self._pxy(x, y), self._Color(*base))
         start = w - len(hist)
         for i, secs in enumerate(hist):
             x = start + i
@@ -278,11 +285,11 @@ class Panel(threading.Thread):
             f = 1.0 if i == len(hist) - 1 else 0.6          # newest bar brightest
             c = self._Color(int(cr * f), int(cg * f), int(cb * f))
             for k in range(height):
-                self.strip.setPixelColor(self._xy(x, y0 + rows - 1 - k), c)
+                self.strip.setPixelColor(self._pxy(x, y0 + rows - 1 - k), c)
 
     def _draw_sonar(self, y0: int, rows: int, color: tuple, which: str) -> None:
         """Radar sweep left-to-right with a fading trail; a blip flashes after each good check."""
-        w = PANEL_WIDTH
+        w = self._rw
         t = time.monotonic()
         cr, cg, cb = color
         base = tuple(max(1, c // 14) if c else 0 for c in color)
@@ -293,7 +300,7 @@ class Panel(threading.Thread):
             f = max(0.0, 1.0 - d / 4) if d < 4 else 0.0     # 4-column trail
             c = self._Color(*base) if f == 0 else self._Color(int(cr * f), int(cg * f), int(cb * f))
             for y in range(y0, y0 + rows):
-                self.strip.setPixelColor(self._xy(x, y), c)
+                self.strip.setPixelColor(self._pxy(x, y), c)
         age = t - self.last_ok[which]
         if age < 1.0:                                        # blip: 2x2 in the middle, fading for 1 s
             f = 1.0 - age
@@ -301,12 +308,12 @@ class Panel(threading.Thread):
             cy = y0 + rows // 2 - 1
             for x in (w // 2 - 1, w // 2):
                 for y in (cy, cy + 1):
-                    self.strip.setPixelColor(self._xy(x, y), c)
+                    self.strip.setPixelColor(self._pxy(x, y), c)
 
     def _draw_ripple(self, y0: int, rows: int, color: tuple, which: str, phase: float = 0.0) -> None:
         """Ring expanding out from the centre of the half every couple of seconds,
         fading as it grows. A good check drops a white spark in the middle."""
-        w = PANEL_WIDTH
+        w = self._rw
         t = time.monotonic() + phase
         cr, cg, cb = color
         base = tuple(max(1, c // 16) if c else 0 for c in color)
@@ -325,14 +332,14 @@ class Panel(threading.Thread):
                 else:
                     f = max(f, 0.0)
                     c = self._Color(max(base[0], int(cr * f)), max(base[1], int(cg * f)), max(base[2], int(cb * f)))
-                self.strip.setPixelColor(self._xy(x, y), c)
+                self.strip.setPixelColor(self._pxy(x, y), c)
         age = t - phase - self.last_ok[which]
         if age < 0.8:                                        # spark: 2x2 white in the middle
             f = 1.0 - age / 0.8
             c = self._Color(int(255 * f), int(255 * f), int(255 * f))
             for x in (w // 2 - 1, w // 2):
                 for y in (y0 + rows // 2 - 1, y0 + rows // 2):
-                    self.strip.setPixelColor(self._xy(x, y), c)
+                    self.strip.setPixelColor(self._pxy(x, y), c)
 
     # flat tetrominoes that fit a 4-row half (list of (dx, dy) cells)
     _TETROMINOES = (
@@ -343,13 +350,22 @@ class Panel(threading.Thread):
         ((0, 0), (1, 0), (2, 0), (1, 1)),          # T
         ((1, 0), (2, 0), (0, 1), (1, 1)),          # S
         ((0, 0), (1, 0), (1, 1), (2, 1)),          # Z
+        ((0, 0), (0, 1), (0, 2), (0, 3)),          # I upright
+        ((0, 0), (0, 1), (0, 2), (1, 2)),          # L upright
+        ((1, 0), (1, 1), (1, 2), (0, 2)),          # J upright
+        ((0, 0), (0, 1), (0, 2), (1, 1)),          # T sideways
+        ((0, 0), (0, 1), (1, 1), (1, 2)),          # S upright
+        ((1, 0), (1, 1), (0, 1), (0, 2)),          # Z upright
     )
+    # classic Game Boy / Guideline colours, indexed like _TETROMINOES (mod 7)
+    _TETRIS_RGB = ((0, 200, 255), (255, 200, 0), (255, 90, 0), (0, 60, 255),
+                   (170, 0, 255), (0, 220, 40), (255, 0, 30))
 
     def _draw_tetris(self, y0: int, rows: int, color: tuple, which: str) -> None:
         """Auto-playing Tetris in the half: pieces drop, full rows clear, a full
         stack flashes and resets. The stack pulses brighter on every good check."""
         import random
-        w = PANEL_WIDTH
+        w = self._rw
         st = self._tetris.setdefault(which, {"grid": [[0] * w for _ in range(rows)], "piece": None,
                                              "x": 0, "y": 0, "frame": 0, "flash": 0})
         st["frame"] += 1
@@ -371,7 +387,10 @@ class Panel(threading.Thread):
                 for r in grid:
                     r[:] = [0] * w
         elif st["piece"] is None:
-            cells = random.choice(self._TETROMINOES)
+            idx = random.choice([i for i, c in enumerate(self._TETROMINOES) if max(dx for dx, _ in c) < w
+                                 and max(dy for _, dy in c) < rows])
+            cells = self._TETROMINOES[idx]
+            st["kind"] = idx % 7 + 1
             pw = max(dx for dx, _ in cells) + 1
             ph = max(dy for _, dy in cells) + 1
             heights = [next((yy for yy in range(rows) if grid[yy][xx]), rows) for xx in range(w)]
@@ -392,31 +411,34 @@ class Panel(threading.Thread):
                     st["flash"] = 8
                 else:
                     for dx, dy in cells:
-                        grid[y + dy][x + dx] = 1
+                        grid[y + dy][x + dx] = st["kind"]
                     full = [i for i, r in enumerate(grid) if all(r)]
                     for i in full:
                         del grid[i]
                         grid.insert(0, [0] * w)
                     st["piece"] = None
 
-        cr, cg, cb = color
         t = time.monotonic()
         boost = 1.0 if t - self.last_ok[which] < 0.4 else 0.55          # stack pulses on a good check
         blink = st["flash"] and (st["flash"] // 2) % 2 == 0
-        dim = self._Color(int(cr * boost), int(cg * boost), int(cb * boost))
-        bright = self._Color(cr, cg, cb)
+
+        def rgb(kind, f):
+            r, g, b = self._TETRIS_RGB[kind - 1] if TETRIS_COLORS else color
+            return self._Color(int(r * f), int(g * f), int(b * f))
+
         off = self._Color(0, 0, 0)
+        white = self._Color(255, 255, 255)
         for yy in range(rows):
             for xx in range(w):
-                c = dim if grid[yy][xx] else off
-                if blink and grid[yy][xx]:
-                    c = self._Color(255, 255, 255)
-                self.strip.setPixelColor(self._xy(xx, y0 + yy), c)
+                k = grid[yy][xx]
+                c = (white if blink else rgb(k, boost)) if k else off
+                self.strip.setPixelColor(self._pxy(xx, y0 + yy), c)
         if st["piece"]:
+            c = rgb(st["kind"], 1.0)
             for dx, dy in st["piece"]:
                 py = st["y"] + dy
                 if py >= 0:
-                    self.strip.setPixelColor(self._xy(st["x"] + dx, y0 + py), bright)
+                    self.strip.setPixelColor(self._pxy(st["x"] + dx, y0 + py), c)
 
     def _pulse_net(self) -> None:
         """Slow purple breathing pulse over the whole panel while the internet is out."""
@@ -432,23 +454,28 @@ class Panel(threading.Thread):
             self._sleep(0.05)
 
     def _run_split(self) -> None:
-        """Two half-panels: main site on top, beta below. Each has its own trace
+        """Two half-panels (live left / beta right, or top / bottom with SPLIT=tb). Each has its own trace
         while up and flashes its own colour when down. Internet-out is purple over all."""
         h = LED_COUNT // PANEL_WIDTH
-        top = h // 2
         n = len(self._EKG)
         offset = frame = 0
         main_up, main_down = (0, GREEN_LEVEL, 0), (RED_LEVEL, 0, 0)
+        if SPLIT == "tb":                      # (x0, width, y0, rows) for each half
+            main_box, beta_box = (0, PANEL_WIDTH, 0, h // 2), (0, PANEL_WIDTH, h // 2, h - h // 2)
+        else:
+            half = PANEL_WIDTH // 2
+            main_box, beta_box = (0, half, 0, h), (half, PANEL_WIDTH - half, 0, h)
         while not self._halt.is_set():
             if self.mode == NET_DOWN:
                 self._pulse_net()
                 continue
             beta = self.beta if self.beta is not None else UP
-            regions = ((0, top, self.mode, main_up, main_down, 0, "main", MAIN_PATTERN),
-                       (top, h - top, beta, BETA_UP_COLOR, BETA_DOWN_COLOR, n // 3, "beta", BETA_PATTERN))
+            regions = ((main_box, self.mode, main_up, main_down, 0, "main", MAIN_PATTERN),
+                       (beta_box, beta, BETA_UP_COLOR, BETA_DOWN_COLOR, n // 3, "beta", BETA_PATTERN))
             for p in range(LED_COUNT):
                 self.strip.setPixelColor(p, self._Color(0, 0, 0))
-            for y0, rows, state, up_c, down_c, phase, which, pattern in regions:
+            for (x0, rw, y0, rows), state, up_c, down_c, phase, which, pattern in regions:
+                self._x0, self._rw = x0, rw
                 if state == UP:
                     if pattern == "bars":
                         self._draw_bars(y0, rows, up_c, which)
@@ -463,8 +490,8 @@ class Panel(threading.Thread):
                 elif int(time.monotonic() / FLASH_PERIOD) % 2 == 0:
                     c = self._Color(*down_c)
                     for y in range(y0, y0 + rows):
-                        for x in range(PANEL_WIDTH):
-                            self.strip.setPixelColor(self._xy(x, y), c)
+                        for x in range(rw):
+                            self.strip.setPixelColor(self._pxy(x, y), c)
             self.strip.show()
             frame += 1
             if frame % 2 == 0:                       # trace scrolls at half the frame rate
