@@ -1,0 +1,15 @@
+[Unit]
+Description=sitewatch read-only status page (http://sitewatch.local:8080)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/sitewatch
+ExecStart=/opt/sitewatch/venv/bin/python /opt/sitewatch/status.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

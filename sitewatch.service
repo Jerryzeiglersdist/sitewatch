@@ -1,0 +1,15 @@
+[Unit]
+Description=Desk alert light for zeiglersdist.com
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/sitewatch
+ExecStart=/opt/sitewatch/venv/bin/python /opt/sitewatch/sitewatch.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

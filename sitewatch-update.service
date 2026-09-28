@@ -1,0 +1,8 @@
+[Unit]
+Description=Pull sitewatch updates from GitHub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/sitewatch/update.sh
