@@ -9,9 +9,11 @@ A Raspberry Pi desk light that watches zeiglersdist.com.
 | Slow purple pulse | Office internet is down, so nothing can be checked |
 | Dark | The Pi or the service is not running |
 
-With `BETA_URL` set (default `LAYOUT=split`), the panel splits in two: the left
-half is the live site (red flash when down) and the right half is the Aldrich
-beta (yellow flash when down); `SPLIT=tb` stacks them top/bottom instead. Each half reacts on its own, and
+With `BETA_URL` set (default `LAYOUT=split`, `SPLIT=full`), one animation runs
+over the whole panel while both sites are up; if the live site goes down the
+left half flashes red over it, and if the Aldrich beta goes down the right half
+flashes yellow. `SPLIT=lr` or `SPLIT=tb` instead gives each site its own half
+with its own animation. Each half reacts on its own, and
 each picks its idle animation with `MAIN_PATTERN` / `BETA_PATTERN`: `tetris`
 (default) is an auto-playing Tetris in classic piece colours (`TETRIS_COLORS=0`
 for the site's colour) whose stack pulses on every good check,

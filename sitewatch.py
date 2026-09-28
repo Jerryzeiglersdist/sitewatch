@@ -38,7 +38,7 @@ load_dotenv(BASE_DIR / ".env")
 SITE_URL = os.getenv("SITE_URL", "https://www.zeiglersdist.com/")
 BETA_URL = os.getenv("BETA_URL", "")                   # optional second site shown as a strip along the bottom
 LAYOUT = os.getenv("LAYOUT", "split").lower()          # split: two half-panels, one per site | strip: beta as a bottom strip
-SPLIT = os.getenv("SPLIT", "lr").lower()               # split layout: lr = live left / beta right | tb = live top / beta bottom
+SPLIT = os.getenv("SPLIT", "full").lower()             # split layout: full = one game over the whole panel, a half flashes when its site is down | lr = live left / beta right | tb = live top / beta bottom
 TETRIS_COLORS = os.getenv("TETRIS_COLORS", "1") == "1"  # tetris: classic piece colours (else the site colour)
 MAIN_PATTERN = os.getenv("MAIN_PATTERN", "tetris").lower()  # split layout, top half:  tetris | ripple | bars | sonar | ekg
 BETA_PATTERN = os.getenv("BETA_PATTERN", "tetris").lower()  # split layout, bottom half: tetris | ripple | bars | sonar | ekg
@@ -460,22 +460,35 @@ class Panel(threading.Thread):
         n = len(self._EKG)
         offset = frame = 0
         main_up, main_down = (0, GREEN_LEVEL, 0), (RED_LEVEL, 0, 0)
+        half = PANEL_WIDTH // 2
         if SPLIT == "tb":                      # (x0, width, y0, rows) for each half
             main_box, beta_box = (0, PANEL_WIDTH, 0, h // 2), (0, PANEL_WIDTH, h // 2, h - h // 2)
         else:
-            half = PANEL_WIDTH // 2
             main_box, beta_box = (0, half, 0, h), (half, PANEL_WIDTH - half, 0, h)
+        full_box = (0, PANEL_WIDTH, 0, h)
+        self.hist["full"] = self.hist["main"]
         while not self._halt.is_set():
             if self.mode == NET_DOWN:
                 self._pulse_net()
                 continue
             beta = self.beta if self.beta is not None else UP
-            regions = ((main_box, self.mode, main_up, main_down, 0, "main", MAIN_PATTERN),
-                       (beta_box, beta, BETA_UP_COLOR, BETA_DOWN_COLOR, n // 3, "beta", BETA_PATTERN))
+            if SPLIT == "full":
+                # one animation over the whole panel; a down site flashes its own half on top of it
+                self.last_ok["full"] = max(self.last_ok["main"], self.last_ok["beta"])
+                regions = ((full_box, UP, main_up, main_down, 0, "full", MAIN_PATTERN),
+                           (main_box, self.mode, None, main_down, 0, "main", None),
+                           (beta_box, beta, None, BETA_DOWN_COLOR, 0, "beta", None))
+            else:
+                regions = ((main_box, self.mode, main_up, main_down, 0, "main", MAIN_PATTERN),
+                           (beta_box, beta, BETA_UP_COLOR, BETA_DOWN_COLOR, n // 3, "beta", BETA_PATTERN))
             for p in range(LED_COUNT):
                 self.strip.setPixelColor(p, self._Color(0, 0, 0))
             for (x0, rw, y0, rows), state, up_c, down_c, phase, which, pattern in regions:
                 self._x0, self._rw = x0, rw
+                if pattern is None:
+                    if state == UP:
+                        continue
+                    state = DOWN                 # overlay-only region: fall through to the flash below
                 if state == UP:
                     if pattern == "bars":
                         self._draw_bars(y0, rows, up_c, which)
