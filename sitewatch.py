@@ -45,7 +45,7 @@ BETA_URL = os.getenv("BETA_URL", "")                   # optional second site sh
 LAYOUT = os.getenv("LAYOUT", "split").lower()          # split: two half-panels, one per site | strip: beta as a bottom strip
 SPLIT = os.getenv("SPLIT", "full").lower()             # split layout: full = one game over the whole panel, a half flashes when its site is down | lr = live left / beta right | tb = live top / beta bottom
 TETRIS_COLORS = os.getenv("TETRIS_COLORS", "1") == "1"  # tetris: classic piece colours (else the site colour)
-PATTERN_ROTATE = int(os.getenv("PATTERN_ROTATE", "30"))  # minutes per pattern when PATTERNS lists more than one (0 = never rotate)
+PATTERN_ROTATE = int(os.getenv("PATTERN_ROTATE", "2"))  # minutes per pattern when PATTERNS lists more than one (0 = never rotate)
 PATTERNS = [p.strip().lower() for p in os.getenv(
     "PATTERNS", "tetris,runner,climber,pong,snake,breakout,invaders,frogger,racer,simon,missile,asteroids,"
                 "cave,flappy,centipede,tanks,lander,pinball,lightsout,skiing,digger,maze").split(",") if p.strip()]
